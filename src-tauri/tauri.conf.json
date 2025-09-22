@@ -1,0 +1,33 @@
+{
+  "package": {
+    "productName": "AssetTracker",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "macOSPrivateApi": false,
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      }
+    },
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' tauri: asset: http://localhost:* https://localhost:*; img-src 'self' data: asset:; media-src 'self' data: asset:"
+    },
+    "windows": [
+      {
+        "title": "AssetTracker",
+        "width": 1100,
+        "height": 720,
+        "resizable": true
+      }
+    ]
+  },
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:5173",
+    "distDir": "dist"
+  }
+}

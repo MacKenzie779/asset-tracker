@@ -3,7 +3,7 @@
 name = "assettracker"
 version = "0.1.0"
 description = "Local-first AssetTracker app"
-authors = ["You"]
+authors = ["MacKenzie779"]
 edition = "2021"
 default-run = "assettracker"
 

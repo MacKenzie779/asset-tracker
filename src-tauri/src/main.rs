@@ -1,4 +1,3 @@
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
@@ -6,11 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
-    SqlitePool,
-    QueryBuilder,
+  sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+  QueryBuilder, Sqlite, SqlitePool,
 };
-
 use tauri::{Manager, State};
 
 #[derive(Clone)]
@@ -18,6 +15,7 @@ struct AppState {
   pool: SqlitePool,
 }
 
+/* ---------- Existing Asset types (ok to keep if you still use them) ---------- */
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct Asset {
   id: i64,
@@ -29,16 +27,14 @@ struct Asset {
   created_at: String,
   updated_at: String,
 }
-
 #[derive(Debug, Deserialize)]
 struct NewAsset {
   name: String,
   category: Option<String>,
-  purchase_date: Option<String>, // ISO date YYYY-MM-DD
+  purchase_date: Option<String>,
   value: f64,
   notes: Option<String>,
 }
-
 #[derive(Debug, Deserialize)]
 struct UpdateAsset {
   id: i64,
@@ -49,6 +45,41 @@ struct UpdateAsset {
   notes: Option<String>,
 }
 
+/* ---------------------- New Finance domain types ---------------------- */
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct AccountOut {
+  id: i64,
+  name: String,
+  color: Option<String>,
+  balance: f64, // computed: SUM(transactions.amount)
+}
+
+#[derive(Debug, Deserialize)]
+struct NewAccount {
+  name: String,
+  color: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TransactionOut {
+  id: i64,
+  account_id: i64,
+  account_name: String,
+  account_color: Option<String>,
+  date: String,
+  description: Option<String>,
+  amount: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct NewTransaction {
+  account_id: i64,
+  date: String,                 // 'YYYY-MM-DD'
+  description: Option<String>,
+  amount: f64,                  // income > 0, expense < 0
+}
+
+/* ---------------------- Asset commands (unchanged runtime queries) ---------------------- */
 #[tauri::command]
 async fn add_asset(state: State<'_, AppState>, input: NewAsset) -> Result<i64, String> {
   let rec = sqlx::query(
@@ -65,7 +96,6 @@ async fn add_asset(state: State<'_, AppState>, input: NewAsset) -> Result<i64, S
   .execute(&state.pool)
   .await
   .map_err(|e| e.to_string())?;
-
   Ok(rec.last_insert_rowid())
 }
 
@@ -81,7 +111,6 @@ async fn list_assets(state: State<'_, AppState>) -> Result<Vec<Asset>, String> {
   .fetch_all(&state.pool)
   .await
   .map_err(|e| e.to_string())?;
-
   Ok(rows)
 }
 
@@ -97,101 +126,141 @@ async fn delete_asset(state: State<'_, AppState>, id: i64) -> Result<bool, Strin
 
 #[tauri::command]
 async fn update_asset(state: State<'_, AppState>, input: UpdateAsset) -> Result<bool, String> {
-  // Build dynamic SQL using QueryBuilder to keep types safe
-  let mut qb = QueryBuilder::<sqlx::Sqlite>::new("UPDATE assets SET ");
+  let mut qb = QueryBuilder::<Sqlite>::new("UPDATE assets SET ");
   let mut any_change = false;
-
   {
-    let mut separated = qb.separated(", ");
-    if let Some(name) = input.name {
-      any_change = true;
-      separated.push("name = ").push_bind(name);
-    }
-    if let Some(category) = input.category {
-      any_change = true;
-      separated.push("category = ").push_bind(category);
-    }
-    if let Some(purchase_date) = input.purchase_date {
-      any_change = true;
-      separated.push("purchase_date = ").push_bind(purchase_date);
-    }
-    if let Some(value) = input.value {
-      any_change = true;
-      separated.push("value = ").push_bind(value);
-    }
-    if let Some(notes) = input.notes {
-      any_change = true;
-      separated.push("notes = ").push_bind(notes);
-    }
-
-    if !any_change {
-      // Nothing to update
-      return Ok(false);
-    }
-
-    // Always bump the timestamp
-    separated.push("updated_at = CURRENT_TIMESTAMP");
+    let mut s = qb.separated(", ");
+    if let Some(name) = input.name { any_change = true; s.push("name = ").push_bind(name); }
+    if let Some(category) = input.category { any_change = true; s.push("category = ").push_bind(category); }
+    if let Some(purchase_date) = input.purchase_date { any_change = true; s.push("purchase_date = ").push_bind(purchase_date); }
+    if let Some(value) = input.value { any_change = true; s.push("value = ").push_bind(value); }
+    if let Some(notes) = input.notes { any_change = true; s.push("notes = ").push_bind(notes); }
+    if !any_change { return Ok(false); }
+    s.push("updated_at = CURRENT_TIMESTAMP");
   }
-
   qb.push(" WHERE id = ").push_bind(input.id);
-
-  let res = qb
-    .build()
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
+  let res = qb.build().execute(&state.pool).await.map_err(|e| e.to_string())?;
   Ok(res.rows_affected() > 0)
 }
 
-fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  let base = app
-    .path_resolver()
-    .app_data_dir()
-    .ok_or_else(|| "Failed to resolve app data dir".to_string())?;
-  fs::create_dir_all(&base).map_err(|e| e.to_string())?;
-  let db = base.join("assettracker.db");
-  Ok(db)
+/* ---------------------- New: Finance commands ---------------------- */
+#[tauri::command]
+async fn add_account(state: State<'_, AppState>, input: NewAccount) -> Result<i64, String> {
+  let rec = sqlx::query(
+    "INSERT INTO accounts (name, color) VALUES (?1, ?2);"
+  )
+  .bind(input.name)
+  .bind(input.color)
+  .execute(&state.pool).await
+  .map_err(|e| e.to_string())?;
+  Ok(rec.last_insert_rowid())
 }
 
-fn db_url(db_path: &PathBuf) -> String {
-  format!("sqlite://{}", db_path.to_string_lossy())
+#[tauri::command]
+async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, String> {
+  let rows = sqlx::query_as::<_, AccountOut>(
+    r#"
+    SELECT
+      a.id,
+      a.name,
+      a.color,
+      COALESCE(SUM(t.amount), 0.0) AS balance
+    FROM accounts a
+    LEFT JOIN transactions t ON t.account_id = a.id
+    GROUP BY a.id, a.name, a.color
+    ORDER BY a.name COLLATE NOCASE ASC;
+    "#
+  )
+  .fetch_all(&state.pool).await
+  .map_err(|e| e.to_string())?;
+  Ok(rows)
+}
+
+#[tauri::command]
+async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<TransactionOut>, String> {
+  let lim = limit.unwrap_or(20);
+  let rows = sqlx::query_as::<_, TransactionOut>(
+    r#"
+    SELECT
+      t.id,
+      t.account_id,
+      a.name    AS account_name,
+      a.color   AS account_color,
+      t.date,
+      t.description,
+      t.amount
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    ORDER BY t.date DESC, t.id DESC
+    LIMIT ?1;
+    "#
+  )
+  .bind(lim)
+  .fetch_all(&state.pool).await
+  .map_err(|e| e.to_string())?;
+  Ok(rows)
+}
+
+#[tauri::command]
+async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> Result<i64, String> {
+  let rec = sqlx::query(
+    r#"
+    INSERT INTO transactions (account_id, date, description, amount)
+    VALUES (?1, ?2, ?3, ?4);
+    "#
+  )
+  .bind(input.account_id)
+  .bind(input.date)
+  .bind(input.description)
+  .bind(input.amount)
+  .execute(&state.pool).await
+  .map_err(|e| e.to_string())?;
+  Ok(rec.last_insert_rowid())
+}
+
+#[tauri::command]
+async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+  let res = sqlx::query("DELETE FROM transactions WHERE id = ?1")
+    .bind(id)
+    .execute(&state.pool).await
+    .map_err(|e| e.to_string())?;
+  Ok(res.rows_affected() > 0)
+}
+
+/* ---------------------- App setup (unchanged connect, runs migrations) ---------------------- */
+fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  let base = app.path_resolver().app_data_dir().ok_or_else(|| "Failed to resolve app data dir".to_string())?;
+  fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+  Ok(base.join("assettracker.db"))
 }
 
 pub fn run() {
   tauri::Builder::default()
     .setup(|app| {
-      let handle = app.handle();
-      let db_path = ensure_db_path(&handle)?;
-      let url = db_url(&db_path);
-
+      let db_path = ensure_db_path(&app.handle())?;
       let pool = tauri::async_runtime::block_on(async move {
-      // Ensure DB file gets created and PRAGMAs are set at connect time
-      let options = SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true);
-
-      let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await?;
-
-  // Run embedded migrations
-  sqlx::migrate!("./migrations").run(&pool).await?;
-  Ok::<SqlitePool, sqlx::Error>(pool)
-}).map_err(|e| e.to_string())?;
-
-      app.manage(AppState{ pool });
-
+        let options = SqliteConnectOptions::new()
+          .filename(&db_path)
+          .create_if_missing(true)
+          .journal_mode(SqliteJournalMode::Wal)
+          .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+          .max_connections(5)
+          .connect_with(options).await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok::<SqlitePool, sqlx::Error>(pool)
+      }).map_err(|e| e.to_string())?;
+      app.manage(AppState { pool });
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![add_asset, list_assets, delete_asset, update_asset])
+    .invoke_handler(tauri::generate_handler![
+      // assets
+      add_asset, list_assets, delete_asset, update_asset,
+      // finance
+      add_account, list_accounts, list_transactions, add_transaction, delete_transaction
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
 
-fn main() {
-  run();
-}
+fn main() { run(); }

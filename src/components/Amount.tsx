@@ -14,8 +14,8 @@ export default function Amount({
   hidden,
   currency = 'EUR',
   className = '',
-  blurInstead = false,
-  colorBySign = false,
+  blurInstead = true,
+  colorBySign = true,
 }: Props) {
   const formatter = useMemo(() => {
     try {
@@ -56,7 +56,7 @@ export default function Amount({
         }
         aria-hidden="true"
       >
-        {'•'.repeat(Math.max(text.length, 6))}
+        {'•'.repeat(6)}
       </span>
     );
   }

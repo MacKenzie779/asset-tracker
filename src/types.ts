@@ -26,7 +26,6 @@ export type Account = {
   balance: number
 }
 
-
 export type NewAccount = {
   name: string
   color?: string | null
@@ -34,22 +33,29 @@ export type NewAccount = {
   initial_balance?: number
 }
 
-
 export type Transaction = {
   id: number
   account_id: number
   account_name: string
   account_color?: string | null
-  date: string            // 'YYYY-MM-DD'
-  description?: string | null
-  amount: number          // income > 0; expense < 0
+  date: string                // 'YYYY-MM-DD'
+  category?: string | null
+  description?: string | null // shown as "Notes"
+  amount: number
+  reimbursement_account_id?: number | null
+  reimbursement_account_name?: string | null
 }
+
 export type NewTransaction = {
   account_id: number
   date: string
   description?: string | null
   amount: number
+  category?: string | null
+  reimbursement_account_id?: number | null
 }
+
+export type UpdateTransaction = Partial<NewTransaction> & { id: number }
 
 export type UpdateAccount = {
   id: number

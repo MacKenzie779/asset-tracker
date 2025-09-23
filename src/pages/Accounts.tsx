@@ -100,7 +100,7 @@ export default function Accounts() {
   };
 
   return (
-    <div className="relative mx-auto max-w-6xl p-4">
+    <div className="relative mx-auto max-w-[1580px] p-4">
       {/* Toolbar: count + sorting */}
       <div className="mb-3 flex items-center justify-between">
         <div className="text-sm text-neutral-500">{items.length} accounts</div>
@@ -128,7 +128,7 @@ export default function Accounts() {
       </div>
 
       {/* Grid of account cards (matches your Figma) */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
         {sortedItems.map((a) => (
           <AccountCard
             key={a.id}

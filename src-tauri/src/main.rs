@@ -68,17 +68,34 @@ struct TransactionOut {
   account_name: String,
   account_color: Option<String>,
   date: String,
-  description: Option<String>,
+  category: Option<String>,
+  description: Option<String>,           // "Notes" in the UI
   amount: f64,
+  reimbursement_account_id: Option<i64>,
+  reimbursement_account_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NewTransaction {
   account_id: i64,
-  date: String,                 // 'YYYY-MM-DD'
+  date: String,                          // 'YYYY-MM-DD'
   description: Option<String>,
-  amount: f64,                  // income > 0, expense < 0
+  amount: f64,
+  category: Option<String>,
+  reimbursement_account_id: Option<i64>,
 }
+
+#[derive(Debug, Deserialize)]
+struct UpdateTransaction {
+  id: i64,
+  account_id: Option<i64>,
+  date: Option<String>,
+  description: Option<String>,
+  amount: Option<f64>,
+  category: Option<String>,
+  reimbursement_account_id: Option<i64>,
+}
+
 
 #[derive(Debug, Deserialize)]
 struct NewAccountInput {
@@ -223,13 +240,17 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
     SELECT
       t.id,
       t.account_id,
-      a.name    AS account_name,
-      a.color   AS account_color,
+      a.name  AS account_name,
+      a.color AS account_color,
       t.date,
+      t.category,
       t.description,
-      t.amount
+      t.amount,
+      t.reimbursement_account_id,
+      r.name  AS reimbursement_account_name
     FROM transactions t
     JOIN accounts a ON a.id = t.account_id
+    LEFT JOIN accounts r ON r.id = t.reimbursement_account_id
     ORDER BY t.date DESC, t.id DESC
     LIMIT ?1;
     "#
@@ -240,22 +261,45 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
   Ok(rows)
 }
 
+
 #[tauri::command]
 async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> Result<i64, String> {
   let rec = sqlx::query(
     r#"
-    INSERT INTO transactions (account_id, date, description, amount)
-    VALUES (?1, ?2, ?3, ?4);
+    INSERT INTO transactions (account_id, date, description, amount, category, reimbursement_account_id)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6);
     "#
   )
   .bind(input.account_id)
   .bind(input.date)
   .bind(input.description)
   .bind(input.amount)
+  .bind(input.category)
+  .bind(input.reimbursement_account_id)
   .execute(&state.pool).await
   .map_err(|e| e.to_string())?;
   Ok(rec.last_insert_rowid())
 }
+
+#[tauri::command]
+async fn update_transaction(state: State<'_, AppState>, input: UpdateTransaction) -> Result<bool, String> {
+  let mut qb = QueryBuilder::<sqlx::Sqlite>::new("UPDATE transactions SET ");
+  let mut any = false;
+  {
+    let mut s = qb.separated(", ");
+    if let Some(v) = input.account_id { any = true; s.push("account_id = ").push_bind(v); }
+    if let Some(v) = input.date       { any = true; s.push("date = ").push_bind(v); }
+    if let Some(v) = input.description { any = true; s.push("description = ").push_bind(v); }
+    if let Some(v) = input.amount     { any = true; s.push("amount = ").push_bind(v); }
+    if let Some(v) = input.category   { any = true; s.push("category = ").push_bind(v); }
+    if let Some(v) = input.reimbursement_account_id { any = true; s.push("reimbursement_account_id = ").push_bind(v); }
+    if !any { return Ok(false); }
+  }
+  qb.push(" WHERE id = ").push_bind(input.id);
+  let res = qb.build().execute(&state.pool).await.map_err(|e| e.to_string())?;
+  Ok(res.rows_affected() > 0)
+}
+
 
 #[tauri::command]
 async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
@@ -332,7 +376,7 @@ pub fn run() {
       // assets
       add_asset, list_assets, delete_asset, update_asset,
       // finance
-      add_account, list_accounts, list_transactions, add_transaction, delete_transaction,
+      add_account, list_accounts, list_transactions, add_transaction, update_transaction, delete_transaction,
       update_account, delete_account
     ])
     .run(tauri::generate_context!())

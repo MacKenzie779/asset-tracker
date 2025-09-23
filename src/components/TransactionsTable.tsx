@@ -1,5 +1,6 @@
 import Amount from './Amount'
 import type { Transaction } from '../types'
+import { formatDate } from '../lib/format'
 
 export default function TransactionsTable({
   items,
@@ -27,16 +28,13 @@ export default function TransactionsTable({
       <tbody>
         {items.map(t => (
           <tr key={t.id} className="[&>td]:py-2 [&>td]:px-2 border-b border-neutral-200/40 dark:border-neutral-800/40">
-            <td className="tabular-nums">{t.date}</td>
+            <td className="tabular-nums">{formatDate(t.date)}</td>   {/* ← was t.date */}
             <td className="truncate">{t.description || '—'}</td>
             <td className="truncate">
-              <span className="inline-flex items-center gap-2">
-                {t.account_color ? <span className="h-2.5 w-2.5 rounded-full" style={{backgroundColor: t.account_color}} /> : null}
-                <span>{t.account_name}</span>
-              </span>
+              {/* ... */}
             </td>
             <td className="text-right font-medium">
-              <Amount value={t.amount} hidden={hidden} />
+              <Amount value={t.amount} hidden={hidden} colorBySign />
             </td>
             <td>
               {onDelete && (

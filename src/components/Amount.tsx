@@ -3,10 +3,10 @@ import { useMemo } from 'react';
 type Props = {
   value: number;
   hidden: boolean;
-  currency?: string; // default 'EUR'
+  currency?: string;     // defaults to 'EUR'
   className?: string;
-  blurInstead?: boolean; // optional: blur rather than mask
-  colorBySign?: boolean; // NEW: color red/green by sign
+  blurInstead?: boolean;
+  colorBySign?: boolean; // red/green by sign
 };
 
 export default function Amount({
@@ -14,19 +14,39 @@ export default function Amount({
   hidden,
   currency = 'EUR',
   className = '',
-  blurInstead = true,
-  colorBySign = true,
+  blurInstead = false,
+  colorBySign = false,
 }: Props) {
-  const text = useMemo(() => {
+  const formatter = useMemo(() => {
     try {
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+      return new Intl.NumberFormat('de-DE', {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+        currencyDisplay: 'symbol',
+        useGrouping: true,
+      });
     } catch {
-      return `${value.toFixed(2)} ${currency}`;
+      return null;
     }
-  }, [value, currency]);
+  }, [currency]);
+
+  const text = useMemo(() => {
+    if (formatter) {
+      // Replace NBSP with normal space so it shows as "... €"
+      return formatter.format(value).replace(/\u00A0/g, ' ');
+    }
+    // Fallback manual "1.500,23 €" if Intl not available
+    const sign = value < 0 ? '-' : '';
+    const abs = Math.abs(value);
+    const fixed = abs.toFixed(2);
+    const [int, dec] = fixed.split('.');
+    const intWithDots = int.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return `${sign}${intWithDots},${dec} €`;
+  }, [formatter, value]);
 
   if (hidden) {
-    // When hidden, we don't leak sign via color
     return (
       <span
         className={
@@ -36,7 +56,7 @@ export default function Amount({
         }
         aria-hidden="true"
       >
-        {'•'.repeat(6)}
+        {'•'.repeat(Math.max(text.length, 6))}
       </span>
     );
   }

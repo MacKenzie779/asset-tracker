@@ -51,14 +51,15 @@ struct AccountOut {
   id: i64,
   name: String,
   color: Option<String>,
-  balance: f64, // computed: SUM(transactions.amount)
+
+  // column is 'account_type' in SQL, but JSON should be 'type'
+  #[sqlx(rename = "account_type")]
+  #[serde(rename = "type")]
+  r#type: String,       // "standard" | "reimbursable"
+
+  balance: f64,
 }
 
-#[derive(Debug, Deserialize)]
-struct NewAccount {
-  name: String,
-  color: Option<String>,
-}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct TransactionOut {
@@ -78,6 +79,15 @@ struct NewTransaction {
   description: Option<String>,
   amount: f64,                  // income > 0, expense < 0
 }
+
+#[derive(Debug, Deserialize)]
+struct NewAccountInput {
+  name: String,
+  color: Option<String>,
+  account_type: String,      // "standard" | "reimbursable"
+  initial_balance: Option<f64>,
+}
+
 
 /* ---------------------- Asset commands (unchanged runtime queries) ---------------------- */
 #[tauri::command]
@@ -145,16 +155,42 @@ async fn update_asset(state: State<'_, AppState>, input: UpdateAsset) -> Result<
 
 /* ---------------------- New: Finance commands ---------------------- */
 #[tauri::command]
-async fn add_account(state: State<'_, AppState>, input: NewAccount) -> Result<i64, String> {
+async fn add_account(state: tauri::State<'_, AppState>, input: NewAccountInput) -> Result<i64, String> {
+  // 1) Insert account with type
   let rec = sqlx::query(
-    "INSERT INTO accounts (name, color) VALUES (?1, ?2);"
+    "INSERT INTO accounts (name, color, type) VALUES (?1, ?2, ?3);"
   )
-  .bind(input.name)
-  .bind(input.color)
+  .bind(&input.name)
+  .bind(&input.color)
+  .bind(&input.account_type) // store as text
   .execute(&state.pool).await
   .map_err(|e| e.to_string())?;
-  Ok(rec.last_insert_rowid())
+
+  let account_id = rec.last_insert_rowid();
+
+  // 2) If initial balance provided and non-zero, create an initial transaction
+  if let Some(amount) = input.initial_balance {
+    if amount != 0.0 {
+      // YYYY-MM-DD
+      let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+      sqlx::query(
+        r#"
+        INSERT INTO transactions (account_id, date, description, amount)
+        VALUES (?1, ?2, ?3, ?4);
+        "#
+      )
+      .bind(account_id)
+      .bind(date)
+      .bind("Initial balance")
+      .bind(amount) // positive = credit, negative = debit
+      .execute(&state.pool).await
+      .map_err(|e| e.to_string())?;
+    }
+  }
+
+  Ok(account_id)
 }
+
 
 #[tauri::command]
 async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, String> {
@@ -164,10 +200,11 @@ async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, St
       a.id,
       a.name,
       a.color,
+      a.type AS account_type,                  -- ← alias to 'account_type'
       COALESCE(SUM(t.amount), 0.0) AS balance
     FROM accounts a
     LEFT JOIN transactions t ON t.account_id = a.id
-    GROUP BY a.id, a.name, a.color
+    GROUP BY a.id, a.name, a.color, a.type
     ORDER BY a.name COLLATE NOCASE ASC;
     "#
   )
@@ -175,6 +212,8 @@ async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, St
   .map_err(|e| e.to_string())?;
   Ok(rows)
 }
+
+
 
 #[tauri::command]
 async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<TransactionOut>, String> {

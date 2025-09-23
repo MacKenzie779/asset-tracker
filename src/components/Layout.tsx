@@ -34,8 +34,8 @@ export default function Layout() {
 
         <nav className="flex-1 py-2">
           <NavItem to="/" active={loc.pathname === '/'} label="Home" icon={IconHome} />
-          <NavItem to="/accounts" active={loc.pathname.startsWith('/accounts')} label="Accounts" icon={IconWallet} />
           <NavItem to="/transactions" active={loc.pathname.startsWith('/transactions')} label="Transactions" icon={IconArrows} />
+          <NavItem to="/accounts" active={loc.pathname.startsWith('/accounts')} label="Accounts" icon={IconWallet} />
           <NavItem to="/stats" active={loc.pathname.startsWith('/stats')} label="Stats" icon={IconChart} />
           <NavItem to="/settings" active={loc.pathname.startsWith('/settings')} label="Settings" icon={IconCog} />
         </nav>

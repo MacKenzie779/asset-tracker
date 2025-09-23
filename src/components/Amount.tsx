@@ -6,6 +6,7 @@ type Props = {
   currency?: string; // default 'EUR'
   className?: string;
   blurInstead?: boolean; // optional: blur rather than mask
+  colorBySign?: boolean; // NEW: color red/green by sign
 };
 
 export default function Amount({
@@ -13,18 +14,19 @@ export default function Amount({
   hidden,
   currency = 'EUR',
   className = '',
-  blurInstead = false,
+  blurInstead = true,
+  colorBySign = true,
 }: Props) {
   const text = useMemo(() => {
     try {
       return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
     } catch {
-      // fallback if locale/currency is odd
       return `${value.toFixed(2)} ${currency}`;
     }
   }, [value, currency]);
 
   if (hidden) {
+    // When hidden, we don't leak sign via color
     return (
       <span
         className={
@@ -34,11 +36,19 @@ export default function Amount({
         }
         aria-hidden="true"
       >
-        {/* Keep spacing consistent with currency lengths */}
-        {'•'.repeat(Math.max(text.length, 6))}
+        {'•'.repeat(6)}
       </span>
     );
   }
 
-  return <span className={`tabular-nums ${className}`}>{text}</span>;
+  const signClass =
+    colorBySign
+      ? value > 0
+        ? ' text-emerald-600 dark:text-emerald-400'
+        : value < 0
+          ? ' text-rose-600 dark:text-rose-400'
+          : ''
+      : '';
+
+  return <span className={`tabular-nums${signClass} ${className}`}>{text}</span>;
 }

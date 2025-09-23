@@ -22,12 +22,18 @@ export type Account = {
   id: number
   name: string
   color?: string | null
+  type: 'standard' | 'reimbursable'
   balance: number
 }
+
+
 export type NewAccount = {
   name: string
   color?: string | null
+  account_type: 'standard' | 'reimbursable'
+  initial_balance?: number
 }
+
 
 export type Transaction = {
   id: number

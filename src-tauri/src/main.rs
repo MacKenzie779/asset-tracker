@@ -88,12 +88,19 @@ struct NewTransaction {
 #[derive(Debug, Deserialize)]
 struct UpdateTransaction {
   id: i64,
+
   account_id: Option<i64>,
-  date: Option<String>,
+  date: Option<String>,          // "YYYY-MM-DD"
   description: Option<String>,
   amount: Option<f64>,
   category: Option<String>,
-  reimbursement_account_id: Option<i64>,
+
+  // Tri-state:
+  // - omit field         => don't touch column
+  // - send null          => SET reimbursement_account_id = NULL
+  // - send number (i64)  => SET reimbursement_account_id = <id>
+  #[serde(default)]
+  reimbursement_account_id: Option<Option<i64>>,
 }
 
 
@@ -282,23 +289,38 @@ async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> R
 }
 
 #[tauri::command]
-async fn update_transaction(state: State<'_, AppState>, input: UpdateTransaction) -> Result<bool, String> {
-  let mut qb = QueryBuilder::<sqlx::Sqlite>::new("UPDATE transactions SET ");
-  let mut any = false;
-  {
-    let mut s = qb.separated(", ");
-    if let Some(v) = input.account_id { any = true; s.push("account_id = ").push_bind(v); }
-    if let Some(v) = input.date       { any = true; s.push("date = ").push_bind(v); }
-    if let Some(v) = input.description { any = true; s.push("description = ").push_bind(v); }
-    if let Some(v) = input.amount     { any = true; s.push("amount = ").push_bind(v); }
-    if let Some(v) = input.category   { any = true; s.push("category = ").push_bind(v); }
-    if let Some(v) = input.reimbursement_account_id { any = true; s.push("reimbursement_account_id = ").push_bind(v); }
-    if !any { return Ok(false); }
-  }
-  qb.push(" WHERE id = ").push_bind(input.id);
-  let res = qb.build().execute(&state.pool).await.map_err(|e| e.to_string())?;
+async fn update_transaction(
+  state: State<'_, AppState>,
+  input: UpdateTransaction
+) -> Result<bool, String> {
+  let res = sqlx::query(
+    r#"
+    UPDATE transactions
+    SET
+      account_id                = COALESCE(?1, account_id),
+      date                      = COALESCE(?2, date),
+      description               = COALESCE(?3, description),
+      amount                    = COALESCE(?4, amount),
+      category                  = COALESCE(?5, category),
+      reimbursement_account_id  = COALESCE(?6, reimbursement_account_id)
+    WHERE id = ?7
+    "#
+  )
+  .bind(input.account_id)                 // ?1
+  .bind(input.date)                       // ?2
+  .bind(input.description)                // ?3
+  .bind(input.amount)                     // ?4
+  .bind(input.category)                   // ?5
+  .bind(input.reimbursement_account_id)   // ?6
+  .bind(input.id)                         // ?7
+  .execute(&state.pool)
+  .await
+  .map_err(|e| e.to_string())?;
+
   Ok(res.rows_affected() > 0)
 }
+
+
 
 
 #[tauri::command]

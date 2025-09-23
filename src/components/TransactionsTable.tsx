@@ -66,7 +66,8 @@ function EditableRow({
   const [notes, setNotes] = useState(row.description ?? '');
   const [amount, setAmount] = useState(row.amount);
   const [accountId, setAccountId] = useState<number>(row.account_id);
-  const [reimId, setReimId] = useState<number | ''>(row.reimbursement_account_id ?? '');
+  // CHANGED: use number | null (no '' sentinel)
+  const [reimId, setReimId] = useState<number | null>(row.reimbursement_account_id ?? null);
 
   const reset = () => {
     setEditing(false);
@@ -75,22 +76,36 @@ function EditableRow({
     setNotes(row.description ?? '');
     setAmount(row.amount);
     setAccountId(row.account_id);
-    setReimId(row.reimbursement_account_id ?? '');
+    setReimId(row.reimbursement_account_id ?? null); // CHANGED
   };
 
   const save = async () => {
     if (!onUpdate) return;
     const iso = parseDateDEToISO(dateDE);
     if (!iso) return; // invalid date; you can toast if desired
-    await onUpdate({
-      id: row.id,
-      date: iso,
-      category: category.trim() || null,
-      description: notes.trim() || null,
-      amount: Number(amount) || 0,
-      account_id: accountId,
-      reimbursement_account_id: reimId === '' ? null : Number(reimId),
-    });
+
+    // Build a minimal patch so backend doesn't assemble empty SET items.
+    const patch: UpdateTransaction = { id: row.id };
+
+    // Always include these core fields (or include only if changed—both are fine)
+    if (iso !== row.date) patch.date = iso;
+    if (Number.isFinite(amount) && amount !== row.amount) patch.amount = Number(amount) || 0;
+    if (accountId !== row.account_id) patch.account_id = accountId;
+
+    // Only include category/description if they actually changed
+    const catTrim = category.trim();
+    const prevCat = row.category ?? '';
+    if (catTrim !== prevCat) patch.category = catTrim || null;
+
+    const notesTrim = notes.trim();
+    const prevNotes = row.description ?? '';
+    if (notesTrim !== prevNotes) patch.description = notesTrim || null;
+
+    // Reimbursement: include only if changed; null means "clear"
+    const prevReim = row.reimbursement_account_id ?? null;
+    if ((reimId ?? null) !== prevReim) patch.reimbursement_account_id = reimId;
+
+    await onUpdate(patch);
     setEditing(false);
   };
 
@@ -153,8 +168,11 @@ function EditableRow({
       {/* Reimbursement */}
       <td className="align-middle">
         {editing ? (
-          <select className="input h-12 w-full" value={reimId}
-                  onChange={e=>setReimId(e.target.value === '' ? '' : parseInt(e.target.value))}>
+          <select
+            className="input w-full"
+            value={reimId ?? ''} // CHANGED
+            onChange={e=>setReimId(e.target.value === '' ? null : parseInt(e.target.value))} // CHANGED
+          >
             <option value="">—</option>
             {reimbursable.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/tauri'
 import type {
   Asset, NewAsset, UpdateAsset,
   Account, NewAccount,
-  Transaction, NewTransaction
+  Transaction, NewTransaction, UpdateAccount
 } from '../types'
 
 /* assets (still available if you use them somewhere) */
@@ -34,4 +34,11 @@ export async function addTransaction(input: NewTransaction): Promise<number> {
 }
 export async function deleteTransaction(id: number): Promise<boolean> {
   return await invoke('delete_transaction', { id })
+}
+
+export async function updateAccount(input: UpdateAccount): Promise<boolean> {
+  return await invoke('update_account', { id: input.id, name: input.name, color: input.color ?? null });
+}
+export async function deleteAccount(id: number): Promise<boolean> {
+  return await invoke('delete_account', { id });
 }

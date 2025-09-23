@@ -227,6 +227,42 @@ async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool,
   Ok(res.rows_affected() > 0)
 }
 
+#[tauri::command]
+async fn update_account(
+  state: tauri::State<'_, AppState>,
+  id: i64,
+  name: Option<String>,
+  color: Option<String>,
+) -> Result<bool, String> {
+  let res = sqlx::query(
+    r#"
+    UPDATE accounts
+    SET
+      name  = COALESCE(?1, name),
+      color = COALESCE(?2, color),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?3;
+    "#
+  )
+  .bind(name)   // None => keep old value
+  .bind(color)  // None => keep old value
+  .bind(id)
+  .execute(&state.pool)
+  .await
+  .map_err(|e| e.to_string())?;
+
+  Ok(res.rows_affected() > 0)
+}
+
+#[tauri::command]
+async fn delete_account(state: tauri::State<'_, AppState>, id: i64) -> Result<bool, String> {
+  let res = sqlx::query("DELETE FROM accounts WHERE id = ?1")
+    .bind(id)
+    .execute(&state.pool).await
+    .map_err(|e| e.to_string())?;
+  Ok(res.rows_affected() > 0)
+}
+
 /* ---------------------- App setup (unchanged connect, runs migrations) ---------------------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   let base = app.path_resolver().app_data_dir().ok_or_else(|| "Failed to resolve app data dir".to_string())?;
@@ -257,7 +293,8 @@ pub fn run() {
       // assets
       add_asset, list_assets, delete_asset, update_asset,
       // finance
-      add_account, list_accounts, list_transactions, add_transaction, delete_transaction
+      add_account, list_accounts, list_transactions, add_transaction, delete_transaction,
+      update_account, delete_account
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

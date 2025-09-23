@@ -44,3 +44,9 @@ export type NewTransaction = {
   description?: string | null
   amount: number
 }
+
+export type UpdateAccount = {
+  id: number
+  name?: string
+  color?: string | null
+}

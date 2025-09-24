@@ -3,7 +3,8 @@ import { invoke } from '@tauri-apps/api/tauri';
 import type {
   Asset, NewAsset, UpdateAsset,
   Account, NewAccount, UpdateAccount,
-  Transaction, NewTransaction, UpdateTransaction
+  Transaction, NewTransaction, UpdateTransaction,
+  TransactionSearch, TransactionSearchResult,
 } from '../types';
 
 /* assets */
@@ -35,7 +36,7 @@ export async function deleteAccount(id: number): Promise<boolean> {
   return invoke<boolean>('delete_account', { id });
 }
 
-/* transactions */
+/* transactions (CRUD) */
 export async function listTransactions(limit?: number): Promise<Transaction[]> {
   return invoke<Transaction[]>('list_transactions', { limit });
 }
@@ -47,4 +48,12 @@ export async function updateTransaction(input: UpdateTransaction): Promise<boole
 }
 export async function deleteTransaction(id: number): Promise<boolean> {
   return invoke<boolean>('delete_transaction', { id });
+}
+
+/* transactions (search + export) */
+export async function searchTransactions(filters: TransactionSearch): Promise<TransactionSearchResult> {
+  return invoke<TransactionSearchResult>('search_transactions', { filters });
+}
+export async function exportTransactionsXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
+  return invoke<string>('export_transactions_xlsx', { filters, columns });
 }

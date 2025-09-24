@@ -1,64 +1,108 @@
-export type Asset = {
-  id: number
-  name: string
-  category?: string | null
-  purchase_date?: string | null
-  value: number
-  notes?: string | null
-  created_at: string
-  updated_at: string
-}
-export type NewAsset = {
-  name: string
-  category?: string | null
-  purchase_date?: string | null
-  value: number
-  notes?: string | null
-}
-export type UpdateAsset = Partial<NewAsset> & { id: number }
+// src/types.ts
 
-/* Finance domain */
+// ---------- Common ----------
+export type ID = number;
+
+// ---------- Accounts ----------
+export type AccountType = 'standard' | 'reimbursable';
+
 export type Account = {
-  id: number
-  name: string
-  color?: string | null
-  type: 'standard' | 'reimbursable'
-  balance: number
-}
+  id: ID;
+  name: string;
+  type: AccountType;
+  color?: string | null;
+  balance?: number; // convenience, may be computed on backend
+};
 
 export type NewAccount = {
-  name: string
-  color?: string | null
-  account_type: 'standard' | 'reimbursable'
-  initial_balance?: number
-}
-
-export type Transaction = {
-  id: number
-  account_id: number
-  account_name: string
-  account_color?: string | null
-  date: string                // 'YYYY-MM-DD'
-  category?: string | null
-  description?: string | null // shown as "Notes"
-  amount: number
-  reimbursement_account_id?: number | null
-  reimbursement_account_name?: string | null
-}
-
-export type NewTransaction = {
-  account_id: number
-  date: string
-  description?: string | null
-  amount: number
-  category?: string | null
-  reimbursement_account_id?: number | null
-}
-
-export type UpdateTransaction = Partial<NewTransaction> & { id: number }
+  name: string;
+  type?: AccountType;
+  color?: string | null;
+  initial_balance?: number; // optional: backend may insert initial transaction
+};
 
 export type UpdateAccount = {
-  id: number
-  name?: string
-  color?: string | null
-}
+  id: ID;
+  name?: string;
+  type?: AccountType;
+  color?: string | null;
+};
+
+// ---------- Categories ----------
+export type Category = {
+  id: ID;
+  name: string;
+};
+
+// ---------- Transactions ----------
+export type Transaction = {
+  id: ID;
+  account_id: ID;
+  account_name?: string;
+  account_color?: string | null;
+
+  date: string; // ISO 'YYYY-MM-DD'
+  category_id?: ID | null;
+  category?: string | null; // display (db category or legacy text)
+  description?: string | null;
+  amount: number;
+};
+
+export type NewTransaction = {
+  account_id: ID;
+  date: string; // ISO
+  amount: number;
+  description?: string | null;
+  category_id?: ID | null;
+  category?: string | null;
+  reimbursement_account_id?: ID | null;
+};
+
+export type UpdateTransaction = {
+  id: ID;
+  account_id?: ID;
+  date?: string; // ISO
+  amount?: number;
+  description?: string | null;
+  category_id?: ID | null;
+  category?: string | null;
+  reimbursement_account_id?: ID | null;
+};
+
+// ---------- Assets (kept for completeness) ----------
+export type Asset = {
+  id: ID;
+  name: string;
+  value: number;
+};
+
+export type NewAsset = {
+  name: string;
+  value: number;
+};
+
+export type UpdateAsset = {
+  id: ID;
+  name?: string;
+  value?: number;
+};
+
+// ---------- Transactions search & export ----------
+export type TxTypeFilter = 'all' | 'income' | 'expense';
+
+export type TransactionSearch = {
+  query?: string;
+  account_id?: number | null;
+  date_from?: string | null; // inclusive, ISO 'YYYY-MM-DD'
+  date_to?: string | null;   // inclusive, ISO 'YYYY-MM-DD'
+  tx_type?: TxTypeFilter;
+  limit?: number;
+  offset?: number;
+};
+
+export type TransactionSearchResult = {
+  items: Transaction[];
+  total: number;
+  sum_income: number;   // > 0
+  sum_expense: number;  // < 0
+};

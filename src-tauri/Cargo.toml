@@ -18,6 +18,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
+rust_xlsxwriter = "0.69"
 
 [profile.release]
 lto = true

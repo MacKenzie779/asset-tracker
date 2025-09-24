@@ -1,5 +1,5 @@
 // src/pages/Transactions.tsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 
 import {
@@ -17,17 +17,21 @@ import type {
   TransactionSearch,
   TransactionSearchResult,
   TxTypeFilter,
+  TxSortBy,
+  TxSortDir,
 } from '../types';
 
-import TransactionsTable from '../components/TransactionsTable';
 import Amount from '../components/Amount';
 import ConfirmDialog from '../components/ConfirmDialog';
+import BasicSelect from '../components/BasicSelect';
+import AccountSelectTx from './transactions/AccountSelectTx';
+import TransactionTableTx from '../components/TransactionTableTx';
 
 type OutletCtx = { hidden: boolean };
 
 const PAGE_SIZE = 15;
 
-/* ---- date helpers ---- */
+/* ---------- helpers ---------- */
 function ymd(date: Date) {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -38,7 +42,16 @@ function firstDayOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.ge
 function lastDayOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
 function firstDayOfYear(d = new Date()) { return new Date(d.getFullYear(), 0, 1); }
 
-/* ---- hooks ---- */
+function useDebounced<T>(value: T, delay = 200) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
+/* ---------- hooks ---------- */
 function useAccounts() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   useEffect(() => { listAccounts().then(setAccounts).catch(console.error); }, []);
@@ -48,49 +61,76 @@ function useAccounts() {
 function useSearch() {
   const [filters, setFilters] = useState<TransactionSearch>({
     limit: PAGE_SIZE,
-    offset: 0,
+    offset: -1,             // ask server for LAST PAGE initially
     tx_type: 'all',
-    account_id: null, // default "All accounts"
+    account_id: null,
+    sort_by: 'date',
+    sort_dir: 'asc',
   });
+
   const update = (patch: Partial<TransactionSearch>) =>
-    setFilters(prev => ({ ...prev, ...patch, offset: 0 }));
+    setFilters(prev => {
+      const next = { ...prev, ...patch };
+      if (
+        'date_from' in patch ||
+        'date_to' in patch ||
+        'account_id' in patch ||
+        'tx_type' in patch ||
+        'sort_by' in patch ||
+        'sort_dir' in patch
+      ) {
+        next.offset = 0;
+      }
+      return next;
+    });
+
   return [filters, update, setFilters] as const;
 }
 
-/* ---- page ---- */
+/* ---------- page ---------- */
 export default function Transactions() {
   const { hidden } = useOutletContext<OutletCtx>();
   const accounts = useAccounts();
 
   const [filters, updateFilters, setFilters] = useSearch();
 
-  const [query, setQuery] = useState('');
+  const [rawQuery, setRawQuery] = useState('');
+  const query = useDebounced(rawQuery, 250);
+
   const [type, setType] = useState<TxTypeFilter>('all');
 
   const [timeSpan, setTimeSpan] = useState<'all' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('all');
-  const [customFrom, setCustomFrom] = useState<string>('');
-  const [customTo, setCustomTo] = useState<string>('');
+  const [pendingCustom, setPendingCustom] = useState<{ from: string; to: string }>({ from: '', to: '' });
 
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<TransactionSearchResult>({
     items: [],
     total: 0,
+    offset: 0,            // server-computed effective offset
     sum_income: 0,
     sum_expense: 0,
   });
 
   const [confirmTxId, setConfirmTxId] = useState<number | null>(null);
 
+  // prevent races between overlapping fetches
+  const reqSeqRef = useRef(0);
+
+  // pull out primitives to stabilize deps (note: these are optional in the type)
+  const {
+    limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
+  } = filters;
+
   const page = useMemo(
-    () => Math.floor((filters.offset ?? 0) / (filters.limit ?? PAGE_SIZE)) + 1,
-    [filters.offset, filters.limit]
+    () => Math.floor((data.offset ?? 0) / (limit ?? PAGE_SIZE)) + 1,
+    [data.offset, limit]
   );
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((data.total ?? 0) / (filters.limit ?? PAGE_SIZE))),
-    [data.total, filters.limit]
+    () => Math.max(1, Math.ceil((data.total ?? 0) / (limit ?? PAGE_SIZE))),
+    [data.total, limit]
   );
 
-  // react to timeSpan preset
+  /* ----- time span presets → set filters (custom uses Apply) ----- */
   useEffect(() => {
     const now = new Date();
     if (timeSpan === 'all') {
@@ -106,34 +146,52 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeSpan]);
 
-  // custom range → filters
+  /* ----- main fetch (NO setFilters inside this effect) ----- */
   useEffect(() => {
-    if (timeSpan === 'custom') {
-      updateFilters({ date_from: customFrom || null, date_to: customTo || null });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customFrom, customTo]);
-
-  useEffect(() => {
+    const mySeq = ++reqSeqRef.current;
     setLoading(true);
-    const f: TransactionSearch = {
-      ...filters,
+
+    const payload: TransactionSearch = {
+      limit,
+      offset,
+      sort_by,
+      sort_dir,
+      account_id,
+      date_from,
+      date_to,
       query: query.trim() || undefined,
       tx_type: type,
     };
-    searchTransactions(f)
-      .then(setData)
+
+    searchTransactions(payload)
+      .then((res) => {
+        if (mySeq !== reqSeqRef.current) return; // stale
+        setData(res); // only update data; never filters here
+      })
       .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [filters, type, query]);
+      .finally(() => {
+        if (mySeq === reqSeqRef.current) setLoading(false);
+      });
+  }, [limit, offset, sort_by, sort_dir, account_id, date_from, date_to, type, query]);
 
   const refresh = async () => {
+    const mySeq = ++reqSeqRef.current;
+    setLoading(true);
     const fresh = await searchTransactions({
-      ...filters,
+      limit,
+      offset,
+      sort_by,
+      sort_dir,
+      account_id,
+      date_from,
+      date_to,
       query: query.trim() || undefined,
       tx_type: type,
     });
-    setData(fresh);
+    if (mySeq === reqSeqRef.current) {
+      setData(fresh);
+      setLoading(false);
+    }
   };
 
   const handleUpdateTx = async (patch: UpdateTransaction) => {
@@ -153,35 +211,50 @@ export default function Transactions() {
 
   const handleExport = async () => {
     const path = await exportTransactionsXlsx(
-      { ...filters, query: query.trim() || undefined, tx_type: type },
+      {
+        limit,
+        offset,
+        sort_by,
+        sort_dir,
+        account_id,
+        date_from,
+        date_to,
+        query: query.trim() || undefined,
+        tx_type: type,
+      },
       ['date', 'account', 'category', 'description', 'amount']
     );
     alert(`Exported to: ${path}`);
   };
 
-  /* ---- UI ---- */
+  // Header click → toggle / set sort (server-side)
+  const handleHeaderSort = (by: TxSortBy) => {
+    setFilters(prev => {
+      const nextDir: TxSortDir =
+        prev.sort_by === by ? (prev.sort_dir === 'asc' ? 'desc' : 'asc') : 'asc';
+      return { ...prev, sort_by: by, sort_dir: nextDir, offset: 0 };
+    });
+  };
+
   return (
     <div className="px-3 sm:px-4 md:px-6 pt-4 grid gap-6 2xl:grid-cols-[minmax(1280px,1fr)_minmax(60px,480px)]">
-      {/* Left column: Filters + Table + Summary + Pagination */}
+      {/* Left column */}
       <div className="card">
         {/* Filters */}
         <div className="p-4 border-b border-neutral-200/50 dark:border-neutral-800/50 grid gap-3 sm:grid-cols-12 items-center">
-          {/* Search input with icon (no overlap) */}
+          {/* Search */}
           <div className="sm:col-span-5">
             <div className="relative">
               <input
                 className="input h-10 w-full"
-                style={{ paddingLeft: '2.25rem' }} // ensure space regardless of .input defaults
+                style={{ paddingLeft: '2.25rem' }}
                 placeholder="Search category, notes"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                value={rawQuery}
+                onChange={(e) => setRawQuery(e.target.value)}
               />
               <svg
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
               >
                 <circle cx="11" cy="11" r="7" />
                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -191,86 +264,64 @@ export default function Transactions() {
 
           {/* Time span */}
           <div className="sm:col-span-3">
-            <select
-              className="input h-10 w-full"
+            <BasicSelect
+              options={[
+                { value: 'all', label: 'All time' },
+                { value: 'this_month', label: 'This month' },
+                { value: 'last_month', label: 'Last month' },
+                { value: 'this_year', label: 'This year' },
+                { value: 'custom', label: 'Custom…' },
+              ]}
               value={timeSpan}
-              onChange={(e) => setTimeSpan(e.target.value as any)}
-            >
-              <option value="all">All time</option>
-              <option value="this_month">This month</option>
-              <option value="last_month">Last month</option>
-              <option value="this_year">This year</option>
-              <option value="custom">Custom…</option>
-            </select>
+              onChange={(v) => setTimeSpan(v as any)}
+              placeholder="Time span"
+              className="w-full"
+            />
           </div>
 
-          {/* Account select — explicit "All accounts" default */}
+          {/* Account */}
           <div className="sm:col-span-2">
-            <select
-              className="input h-10 w-full"
-              value={filters.account_id ?? 'all'}
-              onChange={(e) => {
-                const v = e.target.value;
-                updateFilters({ account_id: v === 'all' ? null : Number(v) });
-              }}
-            >
-              <option value="all">All accounts</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
+            <AccountSelectTx
+              options={accounts}
+              value={account_id ?? null}
+              onChange={(v) => updateFilters({ account_id: v })}
+              className="w-full"
+            />
           </div>
 
           {/* Type */}
           <div className="sm:col-span-2">
-            <select
-              className="input h-10 w-full"
+            <BasicSelect
+              options={[
+                { value: 'all', label: 'All types' },
+                { value: 'income', label: 'Income' },
+                { value: 'expense', label: 'Expense' },
+              ]}
               value={type}
-              onChange={(e) => setType(e.target.value as TxTypeFilter)}
-            >
-              <option value="all">All types</option>
-              <option value="income">Income</option>
-              <option value="expense">Expense</option>
-            </select>
+              onChange={(v) => setType(v as TxTypeFilter)}
+              placeholder="Type"
+              className="w-full"
+            />
           </div>
 
-          {/* Custom date range pickers */}
-          {timeSpan === 'custom' && (
-            <>
-              <div className="sm:col-span-3">
-                <input
-                  type="date"
-                  className="input h-10 w-full"
-                  value={customFrom}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  placeholder="From"
-                />
-              </div>
-              <div className="sm:col-span-3">
-                <input
-                  type="date"
-                  className="input h-10 w-full"
-                  value={customTo}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  placeholder="To"
-                />
-              </div>
-            </>
-          )}
+          {/* Sorting moved to table header */}
         </div>
 
-        {/* Transactions table */}
+        {/* Table (server order; header controls sorting) */}
         <div className="overflow-auto">
-          <TransactionsTable
+          <TransactionTableTx
             items={data.items as Transaction[]}
             accounts={accounts}
             hidden={hidden}
-            onDelete={requestDeleteTx}
+            onDelete={id => setConfirmTxId(id)}
             onUpdate={handleUpdateTx}
+            sortBy={(sort_by ?? 'date') as TxSortBy}   // safe defaults fix TS error
+            sortDir={(sort_dir ?? 'asc') as TxSortDir} // safe defaults fix TS error
+            onRequestSort={handleHeaderSort}
           />
         </div>
 
-        {/* Summary line */}
+        {/* Summary */}
         <div className="p-4 border-t border-neutral-200/50 dark:border-neutral-800/50">
           <div className="flex flex-wrap gap-4 justify-end text-sm">
             <div className="flex items-center gap-2">
@@ -283,7 +334,7 @@ export default function Transactions() {
             </div>
             <div className="flex items-center gap-2 font-medium">
               <span className="text-neutral-500">Saldo</span>
-              <Amount value={(data.sum_income ?? 0) + (data.sum_expense ?? 0)} hidden={hidden} />
+              <Amount value={sumSaldo} hidden={hidden} />
             </div>
           </div>
         </div>
@@ -296,24 +347,24 @@ export default function Transactions() {
           <div className="flex gap-2">
             <button
               className="btn h-8 px-3"
-              disabled={!filters.offset || loading}
+              disabled={data.offset <= 0 || loading}
               onClick={() =>
-                setFilters(prev => ({
-                  ...prev,
-                  offset: Math.max(0, (prev.offset ?? 0) - (prev.limit ?? PAGE_SIZE)),
-                }))
+                setFilters(prev => {
+                  const next = Math.max(0, data.offset - (prev.limit ?? PAGE_SIZE));
+                  return (prev.offset ?? 0) === next ? prev : { ...prev, offset: next };
+                })
               }
             >
               Prev
             </button>
             <button
               className="btn h-8 px-3"
-              disabled={(filters.offset ?? 0) + (filters.limit ?? PAGE_SIZE) >= (data.total ?? 0) || loading}
+              disabled={data.offset + (limit ?? PAGE_SIZE) >= (data.total ?? 0) || loading}
               onClick={() =>
-                setFilters(prev => ({
-                  ...prev,
-                  offset: (prev.offset ?? 0) + (prev.limit ?? PAGE_SIZE),
-                }))
+                setFilters(prev => {
+                  const next = data.offset + (prev.limit ?? PAGE_SIZE);
+                  return (prev.offset ?? 0) === next ? prev : { ...prev, offset: next };
+                })
               }
             >
               Next
@@ -322,7 +373,7 @@ export default function Transactions() {
         </div>
       </div>
 
-      {/* Right column: Export card */}
+      {/* Right column: Export */}
       <div className="card p-4">
         <h2 className="text-base font-semibold mb-2">Export</h2>
         <p className="text-sm text-neutral-500 mb-3">Exports your current filtered result.</p>

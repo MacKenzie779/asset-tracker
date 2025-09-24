@@ -98,13 +98,16 @@ struct TxSearch {
   date_to: Option<String>,   // inclusive, YYYY-MM-DD
   tx_type: Option<String>,   // "all" | "income" | "expense"
   limit: Option<i64>,
-  offset: Option<i64>,
+  offset: Option<i64>,       // if < 0 => compute last page on server
+  sort_by: Option<String>,   // "date"|"category"|"description"|"amount"|"account"|"id"
+  sort_dir: Option<String>,  // "asc"|"desc"
 }
 
 #[derive(Debug, Serialize)]
 struct TxSearchResult {
   items: Vec<TransactionOut>,
   total: i64,
+  offset: i64,      // effective offset used (for page calc in UI)
   sum_income: f64,
   sum_expense: f64,
 }
@@ -248,6 +251,7 @@ async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, St
   .map_err(|e| e.to_string())
 }
 
+/* ---------- list_transactions (Home) ordered by newest first ---------- */
 #[tauri::command]
 async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<TransactionOut>, String> {
   let lim = limit.unwrap_or(20);
@@ -265,7 +269,7 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
     FROM transactions t
     JOIN accounts a ON a.id = t.account_id
     LEFT JOIN categories c ON c.id = t.category_id
-    ORDER BY t.date DESC, t.id DESC
+    ORDER BY DATE(t.date) DESC, t.id DESC
     LIMIT ?1;
     "#
   )
@@ -274,6 +278,7 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
   .map_err(|e| e.to_string())
 }
 
+/* ---------- CRUD ---------- */
 #[tauri::command]
 async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> Result<i64, String> {
   let cat_id = get_or_create_category_id(&state.pool, input.category.clone())
@@ -317,7 +322,6 @@ async fn update_transaction(
   if let Some(v) = input.description { push_set(&mut sql, &mut first, "description"); args.add(v); }
   if let Some(v) = input.amount { push_set(&mut sql, &mut first, "amount"); args.add(v); }
 
-  // Category only if present
   if input.category.is_some() {
     let cat_id = get_or_create_category_id(&state.pool, input.category.clone())
       .await
@@ -332,7 +336,7 @@ async fn update_transaction(
     }
   }
 
-  if first { return Ok(false); } // nothing to update
+  if first { return Ok(false); }
 
   sql.push_str(" WHERE id = ?");
   args.add(input.id);
@@ -409,11 +413,11 @@ fn build_where(filters: &TxSearch, where_sql: &mut String, args: &mut Vec<BindAr
     args.push(BindArg::I(acc));
   }
   if let Some(ref df) = filters.date_from {
-    where_sql.push_str(" AND t.date >= ? ");
+    where_sql.push_str(" AND DATE(t.date) >= DATE(?) ");
     args.push(BindArg::S(df.clone()));
   }
   if let Some(ref dt) = filters.date_to {
-    where_sql.push_str(" AND t.date <= ? ");
+    where_sql.push_str(" AND DATE(t.date) <= DATE(?) ");
     args.push(BindArg::S(dt.clone()));
   }
   if let Some(ref t) = filters.tx_type {
@@ -425,7 +429,6 @@ fn build_where(filters: &TxSearch, where_sql: &mut String, args: &mut Vec<BindAr
   }
   if let Some(ref q) = filters.query {
     let like = format!("%{}%", q.to_lowercase());
-    // ⚠️ Full-text search ONLY over category and description (notes)
     where_sql.push_str(
       " AND (LOWER(t.description) LIKE ? \
          OR LOWER(COALESCE(c.name, t.category, '')) LIKE ?) ",
@@ -435,49 +438,45 @@ fn build_where(filters: &TxSearch, where_sql: &mut String, args: &mut Vec<BindAr
   }
 }
 
+fn build_order(filters: &TxSearch) -> String {
+  let dir = match filters.sort_dir.as_deref() {
+    Some("desc") => "DESC",
+    _ => "ASC",
+  };
+  let primary = match filters.sort_by.as_deref() {
+    Some("category")    => "COALESCE(c.name, t.category)",
+    Some("description") => "t.description",
+    Some("amount")      => "t.amount",
+    Some("account")     => "a.name",
+    Some("id")          => "t.id",
+    _                   => "DATE(t.date)", // default
+  };
+  if primary == "t.id" {
+    format!(" ORDER BY t.id {} ", dir)
+  } else {
+    format!(" ORDER BY {} {}, t.id {} ", primary, dir, dir)
+  }
+}
+
+
 /* ---------- Search & Export commands ---------- */
 #[tauri::command]
 async fn search_transactions(
-  state: State<'_, AppState>,
+  state: tauri::State<'_, AppState>,
   filters: TxSearch,
 ) -> Result<TxSearchResult, String> {
   let mut where_sql = String::new();
   let mut args: Vec<BindArg> = Vec::new();
   build_where(&filters, &mut where_sql, &mut args);
+  let order_sql = build_order(&filters);
 
-  // Items
-  let mut sql_items = String::from(
-    "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
-     FROM transactions t \
-     JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id",
-  );
-  sql_items.push_str(&where_sql);
-  sql_items.push_str(" ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ? ");
-
-  let mut q_items = sqlx::query_as::<_, TransactionOut>(&sql_items);
-  for a in &args {
-    match a {
-      BindArg::I(v) => { q_items = q_items.bind(*v); }
-      BindArg::S(s) => { q_items = q_items.bind(s); }
-    }
-  }
-  let limit = filters.limit.unwrap_or(25);
-  let offset = filters.offset.unwrap_or(0);
-  q_items = q_items.bind(limit).bind(offset);
-
-  let items = q_items.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
-
-  // Count
+  // Count first (needed to compute last page offset when offset < 0)
   let mut sql_count = String::from(
-    "SELECT COUNT(*) \
-     FROM transactions t \
+    "SELECT COUNT(*) FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id",
+     LEFT JOIN categories c ON c.id = t.category_id"
   );
   sql_count.push_str(&where_sql);
-
   let mut q_count = sqlx::query_scalar::<_, i64>(&sql_count);
   for a in &args {
     match a {
@@ -487,6 +486,33 @@ async fn search_transactions(
   }
   let total = q_count.fetch_one(&state.pool).await.map_err(|e| e.to_string())?;
 
+  let limit = filters.limit.unwrap_or(15).max(0);
+  let req_offset = filters.offset.unwrap_or(-1);
+  let last_offset = if total == 0 || limit == 0 { 0 } else { ((total - 1) / limit) * limit };
+  let effective_offset = if req_offset < 0 { last_offset } else if req_offset >= total { last_offset } else { req_offset };
+
+  // Items
+  let mut sql_items = String::from(
+    "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
+            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
+     FROM transactions t \
+     JOIN accounts a ON a.id = t.account_id \
+     LEFT JOIN categories c ON c.id = t.category_id"
+  );
+  sql_items.push_str(&where_sql);
+  sql_items.push_str(&order_sql);
+  sql_items.push_str(" LIMIT ? OFFSET ? ");
+
+  let mut q_items = sqlx::query_as::<_, TransactionOut>(&sql_items);
+  for a in &args {
+    match a {
+      BindArg::I(v) => { q_items = q_items.bind(*v); }
+      BindArg::S(s) => { q_items = q_items.bind(s); }
+    }
+  }
+  q_items = q_items.bind(limit).bind(effective_offset);
+  let items = q_items.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
+
   // Sums
   let mut sql_sums = String::from(
     "SELECT \
@@ -494,7 +520,7 @@ async fn search_transactions(
        COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0.0) AS expense \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id",
+     LEFT JOIN categories c ON c.id = t.category_id"
   );
   sql_sums.push_str(&where_sql);
 
@@ -507,28 +533,29 @@ async fn search_transactions(
   }
   let (sum_income, sum_expense) = q_sums.fetch_one(&state.pool).await.map_err(|e| e.to_string())?;
 
-  Ok(TxSearchResult { items, total, sum_income, sum_expense })
+  Ok(TxSearchResult { items, total, offset: effective_offset, sum_income, sum_expense })
 }
 
 #[tauri::command]
 async fn export_transactions_xlsx(
-  state: State<'_, AppState>,
+  state: tauri::State<'_, AppState>,
   filters: TxSearch,
   columns: Option<Vec<String>>,
 ) -> Result<String, String> {
   let mut where_sql = String::new();
   let mut args: Vec<BindArg> = Vec::new();
   build_where(&filters, &mut where_sql, &mut args);
+  let order_sql = build_order(&filters);
 
   let mut sql = String::from(
     "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
             t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id",
+     LEFT JOIN categories c ON c.id = t.category_id"
   );
   sql.push_str(&where_sql);
-  sql.push_str(" ORDER BY t.date DESC, t.id DESC ");
+  sql.push_str(&order_sql);
 
   let mut q = sqlx::query_as::<_, TransactionOut>(&sql);
   for a in &args {
@@ -544,13 +571,7 @@ async fn export_transactions_xlsx(
   let path = PathBuf::from(download_dir).join(format!("transactions_{}.xlsx", ts));
 
   let cols = columns.unwrap_or_else(|| {
-    vec![
-      "date".into(),
-      "account".into(),
-      "category".into(),
-      "description".into(),
-      "amount".into(),
-    ]
+    vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()]
   });
 
   let mut wb = rust_xlsxwriter::Workbook::new();

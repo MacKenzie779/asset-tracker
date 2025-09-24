@@ -1,10 +1,10 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import type { Account, NewTransaction } from '../types';
 import { todayDE, parseDateDEToISO } from '../lib/format';
-import CategorySelect from './CategorySelect';            // combobox we added earlier
+import CategorySelect from './CategorySelect';
+import AccountSelect from './AccountSelect';
 import { invalidateCategories } from '../hooks/useCategories';
 
-// Parse "5,12" / "5.12" / "1.234,56" / "1,234.56" -> number | null
 function parseAmountString(s: string): number | null {
   if (s == null) return null;
   let t = s.trim().replace(/\s/g, '');
@@ -18,13 +18,16 @@ function parseAmountString(s: string): number | null {
   } else if (hasC) {
     t = t.replace(',', '.');
   }
-  if (/^[-+]?\d+[.]$/.test(t)) return null; // unfinished like "5."
+  if (/^[-+]?\d+[.]$/.test(t)) return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
 }
 
 type TxType = 'income' | 'transfer' | 'expense';
 const LS_KEY = 'tx:lastType';
+const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(' ');
+const invalidCls =
+  'ring-1 ring-red-500/70 border-red-500/70 focus:ring-red-500/70 focus:border-red-500/70';
 
 export default function TransactionAddRow({
   accounts,
@@ -33,267 +36,229 @@ export default function TransactionAddRow({
   accounts: Account[];
   onAdd: (t: NewTransaction) => Promise<void>;
 }) {
-  // ----- Type (remember last choice) -----
   const [txType, setTxType] = useState<TxType>(() => {
     const s = localStorage.getItem(LS_KEY) as TxType | null;
     return s === 'income' || s === 'transfer' || s === 'expense' ? s : 'expense';
   });
   useEffect(() => { localStorage.setItem(LS_KEY, txType); }, [txType]);
 
-  // ----- Shared/basic state -----
   const [dateDE, setDateDE] = useState<string>(todayDE());
   const [notes, setNotes] = useState('');
   const [amountStr, setAmountStr] = useState<string>('');
+  const [showErrors, setShowErrors] = useState(false);
 
   // Income/Expense
   const [category, setCategory] = useState('');
-  const [accountId, setAccountId] = useState<number>(accounts[0]?.id ?? 1);
+  const [accountId, setAccountId] = useState<number | ''>('');      // no default
   const reimbursable = useMemo(() => accounts.filter(a => a.type === 'reimbursable'), [accounts]);
-  const [reimId, setReimId] = useState<number | ''>('');
+  const [reimId, setReimId] = useState<number | ''>('');            // no default
 
   // Transfer
-  const [srcId, setSrcId] = useState<number>(accounts[0]?.id ?? 1);
-  const [dstId, setDstId] = useState<number>(accounts[1]?.id ?? accounts[0]?.id ?? 1);
+  const [srcId, setSrcId] = useState<number | ''>('');              // no default
+  const [dstId, setDstId] = useState<number | ''>('');              // no default
 
-  // Keep account defaults sensible when account list changes
-  useEffect(() => {
-    if (!accounts.length) return;
-    if (!accounts.some(a => a.id === accountId)) setAccountId(accounts[0].id);
-    if (!accounts.some(a => a.id === srcId)) setSrcId(accounts[0].id);
-    if (!accounts.some(a => a.id === dstId)) setDstId(accounts[Math.min(1, Math.max(0, accounts.length - 1))].id);
-  }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  // focus refs for required feedback
+  const dateRef = useRef<HTMLInputElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
 
   const [busy, setBusy] = useState(false);
 
-  // ----- Validation per type -----
+  // validation
   const iso = parseDateDEToISO(dateDE);
   const amt = parseAmountString(amountStr);
-  const catOk = (category ?? '').trim().length > 0;
-  const baseOk = Boolean(iso) && Number.isFinite(amt!) && (amt as number) !== 0;
 
-  const canSubmit =
-    txType === 'income'
-      ? baseOk && catOk && Number.isFinite(accountId)
-      : txType === 'expense'
-      ? baseOk && catOk && Number.isFinite(accountId)
-      : baseOk && Number.isFinite(srcId) && Number.isFinite(dstId) && srcId !== dstId;
+  const isEmptyAccount = (v: number | '') => v === '';
+  const catMissing = txType !== 'transfer' && (category.trim().length === 0);
+  const dateMissing = !iso;
+  const amountInvalid = !Number.isFinite(amt as number) || (amt as number) === 0;
+  const accountsInvalid = txType === 'transfer'
+    ? (srcId === '' || dstId === '' || srcId === dstId)
+    : isEmptyAccount(accountId);
 
-  // ----- Submit handler -----
+  const canSubmit = !dateMissing && !amountInvalid && !accountsInvalid && (txType === 'transfer' || !catMissing);
+  const flagInvalid = (cond: boolean) => showErrors && cond;
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit || !iso || !amt) return;
+    if (!canSubmit || !iso || !amt) {
+      setShowErrors(true);
+      // focus the first invalid field
+      if (dateMissing) { dateRef.current?.focus(); return; }
+      if (amountInvalid) { amountRef.current?.focus(); return; }
+      return;
+    }
 
     setBusy(true);
     try {
       if (txType === 'income') {
-        // 1) primary income
-        await onAdd({
-          account_id: accountId,
-          date: iso,
-          description: notes.trim() || null,
-          amount: Math.abs(amt), // income is positive
-          category: category.trim(),
-          reimbursement_account_id: null, // we no longer store this in DB
-        });
-
-        // 2) optional mirror on reimbursable account (same info, same sign)
+        await onAdd({ account_id: Number(accountId), date: iso, description: notes.trim() || null, amount:  Math.abs(amt), category: category.trim() });
         if (reimId !== '' && reimId !== accountId) {
-          await onAdd({
-            account_id: Number(reimId),
-            date: iso,
-            description: notes.trim() || null,
-            amount: Math.abs(amt),
-            category: category.trim(),
-            reimbursement_account_id: null,
-          });
+          await onAdd({ account_id: Number(reimId),  date: iso, description: notes.trim() || null, amount:  Math.abs(amt), category: category.trim() });
         }
       } else if (txType === 'transfer') {
-        const src = accounts.find(a => a.id === srcId)?.name ?? String(srcId);
-        const dst = accounts.find(a => a.id === dstId)?.name ?? String(dstId);
-        const suffix = `(from ${src} / to ${dst})`;
-        const desc = (notes.trim() ? `${notes.trim()} ` : '') + suffix;
-
-        // out of source (negative)
-        await onAdd({
-          account_id: srcId,
-          date: iso,
-          description: desc,
-          amount: -Math.abs(amt),
-          category: 'Transfer',
-          reimbursement_account_id: null,
-        });
-
-        // into destination (positive)
-        await onAdd({
-          account_id: dstId,
-          date: iso,
-          description: desc,
-          amount: Math.abs(amt),
-          category: 'Transfer',
-          reimbursement_account_id: null,
-        });
+        const src = accounts.find(a => a.id === Number(srcId))?.name ?? String(srcId);
+        const dst = accounts.find(a => a.id === Number(dstId))?.name ?? String(dstId);
+        const desc = (notes.trim() ? `${notes.trim()} ` : '') + `[${src} -> ${dst}]`;
+        await onAdd({ account_id: Number(srcId), date: iso, description: desc, amount: -Math.abs(amt), category: 'Transfer' });
+        await onAdd({ account_id: Number(dstId), date: iso, description: desc, amount:  Math.abs(amt), category: 'Transfer' });
       } else {
-        // expense
-        await onAdd({
-          account_id: accountId,
-          date: iso,
-          description: notes.trim() || null,
-          amount: -Math.abs(amt), // expense is negative
-          category: category.trim(),
-          reimbursement_account_id: null,
-        });
-
-        // optional mirror on reimbursable account (same info, same sign per your spec)
+        await onAdd({ account_id: Number(accountId), date: iso, description: notes.trim() || null, amount: -Math.abs(amt), category: category.trim() });
         if (reimId !== '' && reimId !== accountId) {
-          await onAdd({
-            account_id: Number(reimId),
-            date: iso,
-            description: notes.trim() || null,
-            amount: -Math.abs(amt),
-            category: category.trim(),
-            reimbursement_account_id: null,
-          });
+          await onAdd({ account_id: Number(reimId),  date: iso, description: notes.trim() || null, amount: -Math.abs(amt), category: category.trim() });
         }
       }
 
-      // refresh categories in the chooser everywhere
       invalidateCategories();
-
-      // Reset lightweight fields, keep accounts & type for speed
-      setDateDE(todayDE());
-      setNotes('');
-      setAmountStr('');
-      setCategory('');
-      setReimId('');
+      // reset light fields; keep type
+      setDateDE(todayDE()); setNotes(''); setAmountStr(''); setCategory(''); setReimId(''); setAccountId(''); setSrcId(''); setDstId('');
+      setShowErrors(false);
     } finally {
       setBusy(false);
     }
   };
 
-  // ----- UI -----
   return (
-    <form className="grid grid-cols-12 gap-2 items-center p-2" onSubmit={onSubmit}>
-      {/* Type selector */}
-      <div className="col-span-12 flex gap-2">
+    <form className="p-2" onSubmit={onSubmit}>
+      {/* type selector */}
+      <div className="mb-2 flex gap-2 p-3">
         <TypeBtn cur={txType} me="income"   onClick={setTxType}>Income</TypeBtn>
         <TypeBtn cur={txType} me="transfer" onClick={setTxType}>Transfer</TypeBtn>
         <TypeBtn cur={txType} me="expense"  onClick={setTxType}>Expense</TypeBtn>
       </div>
 
-      {/* Date */}
-      <input
-        className="input col-span-2"
-        placeholder="dd.mm.yyyy"
-        value={dateDE}
-        onChange={(e) => setDateDE(e.target.value)}
-      />
+      {/* 12-col grid; md+ stays on one line; account pickers use AccountSelect (same design as CategorySelect) */}
+      <div className="grid grid-cols-12 md:grid-cols-[repeat(48,minmax(0,1fr))] gap-2 items-center">
+        {/* Date * */}
+        <input
+          ref={dateRef}
+          className={cx('input h-9 tabular-nums col-span-12 md:col-span-5', flagInvalid(dateMissing) && invalidCls)}
+          placeholder="dd.mm.yyyy*"
+          value={dateDE}
+          onChange={(e) => setDateDE(e.target.value)}
+        />
 
-      {/* Fields by type */}
-      {txType !== 'transfer' ? (
-        <>
-          {/* Category (required) */}
-          <CategorySelect
-            className="input col-span-2"
-            value={category}
-            onChange={setCategory}
-          />
-          {/* Notes */}
-          <input
-            className="input col-span-3"
-            placeholder="Notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-          {/* Amount (required) */}
-          <input
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9]*[.,]?[0-9]*"
-            className="input col-span-2 text-right"
-            placeholder="0,00"
-            value={amountStr}
-            onChange={(e) => setAmountStr(e.target.value)}
-          />
-          {/* Account (required) */}
-          <select
-            className="input col-span-2"
-            value={accountId}
-            onChange={(e) => setAccountId(parseInt(e.target.value))}
-          >
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-          {/* Reimbursable (optional; not saved; only used to auto-create mirror tx) */}
-          <select
-            className="input col-span-1"
-            value={reimId}
-            onChange={(e) => setReimId(e.target.value === '' ? '' : parseInt(e.target.value))}
-          >
-            <option value="">—</option>
-            {reimbursable.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </>
-      ) : (
-        <>
-          {/* Notes */}
-          <input
-            className="input col-span-4 md:col-span-3"
-            placeholder="Notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-          {/* Amount (required) */}
-          <input
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9]*[.,]?[0-9]*"
-            className="input col-span-2 text-right"
-            placeholder="0,00"
-            value={amountStr}
-            onChange={(e) => setAmountStr(e.target.value)}
-          />
-          {/* Source account (required) */}
-          <select
-            className="input col-span-3 md:col-span-2"
-            value={srcId}
-            onChange={(e) => setSrcId(parseInt(e.target.value))}
-          >
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-          {/* Destination account (required) */}
-          <select
-            className="input col-span-3 md:col-span-3"
-            value={dstId}
-            onChange={(e) => setDstId(parseInt(e.target.value))}
-          >
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        </>
-      )}
+        {txType !== 'transfer' ? (
+          <>
+            {/* Category * */}
+            <div className="col-span-12 md:col-span-8">
+              <CategorySelect
+                className={cx('input h-9 w-full', flagInvalid(catMissing) && invalidCls)}
+                value={category}
+                onChange={setCategory}
+                placeholder="Category*"
+              />
+            </div>
 
-      {/* Submit */}
-      <button
-        className="btn btn-primary col-span-12 md:col-span-12 w-fit px-3"
-        disabled={busy || !canSubmit}
-      >
-        {busy ? 'Add…' : 'Add'}
-      </button>
+            {/* Notes */}
+            <input
+              className="input h-9 col-span-12 md:col-span-10"
+              placeholder="Notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+
+            {/* Amount * */}
+            <input
+              ref={amountRef}
+              type="text"
+              inputMode="decimal"
+              pattern="[0-9]*[.,]?[0-9]*"
+              className={cx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && invalidCls)}
+              placeholder="0,00*"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value)}
+              title={amountInvalid ? 'Enter a non-zero amount' : undefined}
+            />
+
+            {/* Account * — same design as CategorySelect */}
+            <div className={cx('col-span-12 md:col-span-8', flagInvalid(isEmptyAccount(accountId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+              <AccountSelect
+                options={accounts}
+                value={accountId}
+                onChange={setAccountId}
+                placeholder="Account*"
+                className="input h-9 w-full"
+              />
+            </div>
+
+            {/* Reimbursable (optional) — same width as Account */}
+            <div className="col-span-12 md:col-span-8">
+              <AccountSelect
+                options={reimbursable}
+                value={reimId}
+                onChange={setReimId}
+                placeholder="Reimbursable"
+                className="input h-9 w-full"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Notes */}
+            <input
+              className="input h-9 col-span-12 md:col-span-15"
+              placeholder="Notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+
+            {/* Amount * */}
+            <input
+              ref={amountRef}
+              type="text"
+              inputMode="decimal"
+              pattern="[0-9]*[.,]?[0-9]*"
+              className={cx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && invalidCls)}
+              placeholder="0,00*"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value)}
+              title={amountInvalid ? 'Enter a non-zero amount' : undefined}
+            />
+
+            {/* Source * */}
+            <div className={cx('col-span-12 md:col-span-10', flagInvalid(srcId === '') && 'ring-1 ring-red-500/70 rounded-xl')}>
+              <AccountSelect
+                options={accounts}
+                value={srcId}
+                onChange={setSrcId}
+                placeholder="Source account*"
+                className="input h-9 w-full"
+              />
+            </div>
+
+            {/* Destination * */}
+            <div className={cx('col-span-12 md:col-span-10', flagInvalid(dstId === '' || (srcId !== '' && dstId === srcId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+              <AccountSelect
+                options={accounts}
+                value={dstId}
+                onChange={setDstId}
+                placeholder="Destination account*"
+                className="input h-9 w-full"
+              />
+            </div>
+          </>
+        )}
+
+        {/* Add button — bigger paper plane */}
+        <button
+          title="Add"
+          aria-label="Add"
+          disabled={busy || !canSubmit}
+          className="
+            btn btn-primary h-10 w-100 p-0 rounded-full
+            col-span-10 md:col-span-4 grid place-items-center
+            disabled:opacity-40 disabled:cursor-not-allowed disabled:saturate-0
+          "
+        >
+          <PaperPlaneIcon />
+        </button>
+
+      </div>
     </form>
   );
 }
 
-/* --- tiny segmented button --- */
+/* --- small UI bits --- */
 function TypeBtn({
   cur, me, onClick, children,
 }: {
@@ -315,3 +280,20 @@ function TypeBtn({
     </button>
   );
 }
+
+function PaperPlaneIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      className="block"
+      fill="none"
+      stroke="currentColor"
+    >
+      <path d="M22 2L11 13" strokeWidth="2" strokeLinecap="round"/>
+      <path d="M22 2L15 22l-4-9-9-4 20-7Z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+

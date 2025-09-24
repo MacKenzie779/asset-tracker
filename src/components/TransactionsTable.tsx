@@ -4,6 +4,8 @@ import { formatDate, parseDateDEToISO } from '../lib/format';
 import type { Account, Transaction, UpdateTransaction } from '../types';
 import CategorySelect from './CategorySelect';
 import { invalidateCategories } from '../hooks/useCategories';
+import AccountSelect from './AccountSelect';
+
 
 export default function TransactionsTable({
   items,
@@ -27,7 +29,7 @@ export default function TransactionsTable({
         <thead>
           <tr className="[&>th]:py-2 [&>th]:px-2 text-left border-b border-neutral-200/50 dark:border-neutral-800/50">
             <th style={{width: 120}}>Date</th>
-            <th style={{width: 150}}>Category</th>
+            <th style={{width: 200}}>Category</th>
             <th>Notes</th>
             <th className="text-right" style={{width: 140}}>Value</th>
             <th style={{width: 200}}>Account</th>
@@ -147,7 +149,7 @@ function EditableRow({
         {editing ? (
           <input className="input h-8 w-full" placeholder="Notes" value={notes} onChange={e=>setNotes(e.target.value)} />
         ) : (
-          row.description || '—'
+          row.description || ''
         )}
       </td>
 
@@ -171,9 +173,15 @@ function EditableRow({
       {/* Account */}
       <td className="align-middle">
         {editing ? (
-          <select className="input w-full" value={accountId} onChange={e=>setAccountId(parseInt(e.target.value))}>
-            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <div className="w-full">
+            <AccountSelect
+              options={accounts}
+              value={accountId}
+              onChange={(v) => setAccountId(v === '' ? row.account_id : Number(v))}
+              placeholder="Account"
+              className="input h-8 w-full"
+            />
+          </div>
         ) : (
           row.account_name
         )}

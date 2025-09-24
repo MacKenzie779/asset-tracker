@@ -2,11 +2,11 @@
 
 use std::fs;
 use std::path::PathBuf;
-
+use sqlx::{Arguments};
 use serde::{Deserialize, Serialize};
 use sqlx::{
-  sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
-  QueryBuilder, Sqlite, SqlitePool,
+  sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+  QueryBuilder, Row, Sqlite, SqlitePool,
 };
 use tauri::{Manager, State};
 
@@ -60,7 +60,6 @@ struct AccountOut {
   balance: f64,
 }
 
-
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct TransactionOut {
   id: i64,
@@ -103,15 +102,39 @@ struct UpdateTransaction {
   reimbursement_account_id: Option<Option<i64>>,
 }
 
+/* ---------------------- Categories (DB-level unique) ---------------------- */
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct Category { id: i64, name: String }
 
-#[derive(Debug, Deserialize)]
-struct NewAccountInput {
-  name: String,
-  color: Option<String>,
-  account_type: String,      // "standard" | "reimbursable"
-  initial_balance: Option<f64>,
+/// Map an optional category *name* to an optional `categories.id`.
+/// - Some("Groceries") -> get/create id (case-insensitive unique)
+/// - Some("") / whitespace -> Ok(None)  (clear)
+/// - None -> Ok(None)                    (leave unchanged unless you set explicitly)
+async fn get_or_create_category_id(
+  pool: &SqlitePool,
+  name_opt: Option<String>,
+) -> Result<Option<i64>, sqlx::Error> {
+  let name = match name_opt.map(|s| s.trim().to_string()) {
+    Some(s) if !s.is_empty() => s,
+    _ => return Ok(None),
+  };
+
+  // Insert if missing (COLLATE NOCASE UNIQUE)
+  sqlx::query("INSERT OR IGNORE INTO categories(name) VALUES (?)")
+    .bind(&name)
+    .execute(pool)
+    .await?;
+
+  // make sure you also have: use sqlx::Row;
+  let rec = sqlx::query("SELECT id FROM categories WHERE name = ? COLLATE NOCASE")
+    .bind(&name)
+    .fetch_one(pool)
+    .await?;
+
+  // before: Ok(rec.get::<i64, _>(0))
+  Ok(Some(rec.get::<i64, _>(0)))  // <-- wrap in Some(...)
+
 }
-
 
 /* ---------------------- Asset commands (unchanged runtime queries) ---------------------- */
 #[tauri::command]
@@ -215,7 +238,6 @@ async fn add_account(state: tauri::State<'_, AppState>, input: NewAccountInput) 
   Ok(account_id)
 }
 
-
 #[tauri::command]
 async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, String> {
   let rows = sqlx::query_as::<_, AccountOut>(
@@ -237,8 +259,6 @@ async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountOut>, St
   Ok(rows)
 }
 
-
-
 #[tauri::command]
 async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<TransactionOut>, String> {
   let lim = limit.unwrap_or(20);
@@ -250,7 +270,7 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
       a.name  AS account_name,
       a.color AS account_color,
       t.date,
-      t.category,
+      COALESCE(c.name, t.category) AS category,   -- ← from categories table, fallback to legacy text
       t.description,
       t.amount,
       t.reimbursement_account_id,
@@ -258,6 +278,7 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
     FROM transactions t
     JOIN accounts a ON a.id = t.account_id
     LEFT JOIN accounts r ON r.id = t.reimbursement_account_id
+    LEFT JOIN categories c ON c.id = t.category_id
     ORDER BY t.date DESC, t.id DESC
     LIMIT ?1;
     "#
@@ -268,12 +289,15 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
   Ok(rows)
 }
 
-
 #[tauri::command]
 async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> Result<i64, String> {
+  let cat_id = get_or_create_category_id(&state.pool, input.category.clone())
+    .await
+    .map_err(|e| e.to_string())?;
+
   let rec = sqlx::query(
     r#"
-    INSERT INTO transactions (account_id, date, description, amount, category, reimbursement_account_id)
+    INSERT INTO transactions (account_id, date, description, amount, category_id, reimbursement_account_id)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6);
     "#
   )
@@ -281,7 +305,7 @@ async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> R
   .bind(input.date)
   .bind(input.description)
   .bind(input.amount)
-  .bind(input.category)
+  .bind(cat_id)                          // ← DB-level category
   .bind(input.reimbursement_account_id)
   .execute(&state.pool).await
   .map_err(|e| e.to_string())?;
@@ -293,29 +317,70 @@ async fn update_transaction(
   state: State<'_, AppState>,
   input: UpdateTransaction
 ) -> Result<bool, String> {
-  let res = sqlx::query(
-    r#"
-    UPDATE transactions
-    SET
-      account_id                = COALESCE(?1, account_id),
-      date                      = COALESCE(?2, date),
-      description               = COALESCE(?3, description),
-      amount                    = COALESCE(?4, amount),
-      category                  = COALESCE(?5, category),
-      reimbursement_account_id  = COALESCE(?6, reimbursement_account_id)
-    WHERE id = ?7
-    "#
-  )
-  .bind(input.account_id)                 // ?1
-  .bind(input.date)                       // ?2
-  .bind(input.description)                // ?3
-  .bind(input.amount)                     // ?4
-  .bind(input.category)                   // ?5
-  .bind(input.reimbursement_account_id)   // ?6
-  .bind(input.id)                         // ?7
-  .execute(&state.pool)
-  .await
-  .map_err(|e| e.to_string())?;
+  // Build: UPDATE transactions SET <fields...> WHERE id = ?
+  let mut sql = String::from("UPDATE transactions SET ");
+  let mut first = true;
+  let mut args = SqliteArguments::default();
+
+  // helper (no closures) to append "col = ?"
+  fn push_set(sql: &mut String, first: &mut bool, col: &str) {
+    if !*first { sql.push_str(", "); }
+    *first = false;
+    sql.push_str(col);
+    sql.push_str(" = ?");
+  }
+
+  if let Some(v) = input.account_id {
+    push_set(&mut sql, &mut first, "account_id"); args.add(v);
+  }
+  if let Some(v) = input.date {
+    push_set(&mut sql, &mut first, "date"); args.add(v);
+  }
+  if let Some(v) = input.description {
+    push_set(&mut sql, &mut first, "description"); args.add(v);
+  }
+  if let Some(v) = input.amount {
+    push_set(&mut sql, &mut first, "amount"); args.add(v);
+  }
+
+  // Category: only if field was present
+  if input.category.is_some() {
+    let cat_id = get_or_create_category_id(&state.pool, input.category.clone())
+      .await
+      .map_err(|e| e.to_string())?;
+    match cat_id {
+      Some(id) => { push_set(&mut sql, &mut first, "category_id"); args.add(id); }
+      None => {
+        if !first { sql.push_str(", "); }
+        first = false;
+        sql.push_str("category_id = NULL");
+      }
+    }
+  }
+
+  // Reimbursement tri-state
+  match input.reimbursement_account_id {
+    Some(Some(id)) => { push_set(&mut sql, &mut first, "reimbursement_account_id"); args.add(id); }
+    Some(None) => {
+      if !first { sql.push_str(", "); }
+      first = false;
+      sql.push_str("reimbursement_account_id = NULL");
+    }
+    None => {}
+  }
+
+  if first {
+    // nothing to update
+    return Ok(false);
+  }
+
+  sql.push_str(" WHERE id = ?");
+  args.add(input.id);
+
+  let res = sqlx::query_with(&sql, args)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
   Ok(res.rows_affected() > 0)
 }
@@ -330,6 +395,14 @@ async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool,
     .execute(&state.pool).await
     .map_err(|e| e.to_string())?;
   Ok(res.rows_affected() > 0)
+}
+
+#[derive(Debug, Deserialize)]
+struct NewAccountInput {
+  name: String,
+  color: Option<String>,
+  account_type: String,      // "standard" | "reimbursable"
+  initial_balance: Option<f64>,
 }
 
 #[tauri::command]
@@ -368,6 +441,15 @@ async fn delete_account(state: tauri::State<'_, AppState>, id: i64) -> Result<bo
   Ok(res.rows_affected() > 0)
 }
 
+/* ---------------------- Optional: list categories for a chooser ---------------------- */
+#[tauri::command]
+async fn list_categories(state: State<'_, AppState>) -> Result<Vec<Category>, String> {
+  sqlx::query_as::<_, Category>("SELECT id, name FROM categories ORDER BY name COLLATE NOCASE")
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /* ---------------------- App setup (unchanged connect, runs migrations) ---------------------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   let base = app.path_resolver().app_data_dir().ok_or_else(|| "Failed to resolve app data dir".to_string())?;
@@ -399,7 +481,9 @@ pub fn run() {
       add_asset, list_assets, delete_asset, update_asset,
       // finance
       add_account, list_accounts, list_transactions, add_transaction, update_transaction, delete_transaction,
-      update_account, delete_account
+      update_account, delete_account,
+      // categories
+      list_categories,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

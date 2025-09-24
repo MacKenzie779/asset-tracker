@@ -2,31 +2,29 @@ import { useMemo, useState } from 'react';
 import Amount from './Amount';
 import { formatDate, parseDateDEToISO } from '../lib/format';
 import type { Account, Transaction, UpdateTransaction } from '../types';
+import CategorySelect from '../components/CategorySelect';
+import { invalidateCategories } from '../hooks/useCategories';
 
-// Local, robust EU/US decimal parser. Returns null if it can't parse.
-function parseAmountString(s: string): number | null {
-  if (s == null) return null;
-  let t = s.trim().replace(/\s/g, '');
-  if (t === '') return null;
-
-  const hasComma = t.includes(',');
-  const hasDot = t.includes('.');
-
-  if (hasComma && hasDot) {
-    const lastComma = t.lastIndexOf(',');
-    const lastDot = t.lastIndexOf('.');
-    if (lastComma > lastDot) {
-      t = t.replace(/\./g, '').replace(',', '.'); // "1.234,56" -> "1234.56"
-    } else {
-      t = t.replace(/,/g, '');                    // "1,234.56" -> "1234.56"
-    }
-  } else if (hasComma) {
-    t = t.replace(',', '.');                      // "5,12" -> "5.12"
+// ---- local helpers for categories (merge from items + localStorage) ----
+function loadCategoriesLS(): string[] {
+  try {
+    const raw = localStorage.getItem('categories');
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    return Array.from(new Set(arr)).filter(Boolean);
+  } catch {
+    return [];
   }
-
-  if (/^[-+]?\d+[.]$/.test(t)) return null;       // unfinished "5."
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
+}
+function saveCategoriesLS(list: string[]) {
+  try {
+    localStorage.setItem('categories', JSON.stringify(Array.from(new Set(list)).filter(Boolean)));
+  } catch {}
+}
+function canonicalizeCategory(input: string, options: string[]): string {
+  const t = (input ?? '').trim();
+  if (!t) return '';
+  const hit = options.find(o => o.toLowerCase() === t.toLowerCase());
+  return hit ?? t;
 }
 
 export default function TransactionsTable({
@@ -44,44 +42,66 @@ export default function TransactionsTable({
 }) {
   // items come newest-first from backend; we need oldest → newest (newest at bottom)
   const rows = useMemo(() => [...items].reverse(), [items]);
-  const reimbursable = useMemo(() => accounts.filter(a => a.type === 'reimbursable'), [accounts]);
+
+  // Build category list from existing items + any locally stored ones
+  const categories = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of items) if (it.category) s.add(it.category);
+    for (const c of loadCategoriesLS()) s.add(c);
+    return Array.from(s).sort((a, b) => a.localeCompare(b, 'de'));
+  }, [items]);
+
+  const reimbursable = useMemo(
+    () => accounts.filter(a => a.type === 'reimbursable'),
+    [accounts]
+  );
 
   return (
-    <table className="min-w-full text-sm">
-      <thead>
-        <tr className="[&>th]:py-2 [&>th]:px-2 text-left border-b border-neutral-200/50 dark:border-neutral-800/50">
-          <th style={{width: 120}}>Date</th>
-          <th style={{width: 150}}>Category</th>
-          <th>Notes</th>
-          <th className="text-right" style={{width: 140}}>Value</th>
-          <th style={{width: 180}}>Account</th>
-          <th style={{width: 160}}>Reimbursement</th>
-          <th className="w-[1%]"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(row => (
-          <EditableRow
-            key={row.id}
-            row={row}
-            accounts={accounts}
-            reimbursable={reimbursable}
-            hidden={hidden}
-            onDelete={onDelete}
-            onUpdate={onUpdate}
-          />
+    <>
+      <datalist id="categories-list">
+        {categories.map((c) => (
+          <option key={c} value={c} />
         ))}
-      </tbody>
-    </table>
+      </datalist>
+
+      <table className="min-w-full text-sm">
+        <thead>
+          <tr className="[&>th]:py-2 [&>th]:px-2 text-left border-b border-neutral-200/50 dark:border-neutral-800/50">
+            <th style={{ width: 120 }}>Date</th>
+            <th style={{ width: 150 }}>Category</th>
+            <th>Notes</th>
+            <th className="text-right" style={{ width: 140 }}>Value</th>
+            <th style={{ width: 180 }}>Account</th>
+            <th style={{ width: 160 }}>Reimbursement</th>
+            <th className="w-[1%]"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <EditableRow
+              key={row.id}
+              row={row}
+              accounts={accounts}
+              reimbursable={reimbursable}
+              categories={categories}
+              hidden={hidden}
+              onDelete={onDelete}
+              onUpdate={onUpdate}
+            />
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 
 function EditableRow({
-  row, accounts, reimbursable, hidden, onDelete, onUpdate
+  row, accounts, reimbursable, categories, hidden, onDelete, onUpdate
 }: {
   row: Transaction;
   accounts: Account[];
   reimbursable: Account[];
+  categories: string[];            // added
   hidden: boolean;
   onDelete?: (id: number) => void;
   onUpdate?: (patch: UpdateTransaction) => Promise<void>;
@@ -92,7 +112,7 @@ function EditableRow({
   const [notes, setNotes] = useState(row.description ?? '');
   const [amountStr, setAmountStr] = useState<string>(
     row.amount != null ? row.amount.toFixed(2).replace('.', ',') : ''
-  ); // keep as string while typing
+  );
   const [accountId, setAccountId] = useState<number>(row.account_id);
   const [reimId, setReimId] = useState<number | null>(row.reimbursement_account_id ?? null);
 
@@ -111,17 +131,29 @@ function EditableRow({
     const iso = parseDateDEToISO(dateDE);
     if (!iso) return;
 
-    const amt = parseAmountString(amountStr); // parse what the user typed
+    // Parse amount string ("5,12" / "5.12")
+    let t = (amountStr ?? '').trim().replace(/\s/g, '');
+    if (t.includes(',') && t.includes('.')) {
+      const lastComma = t.lastIndexOf(',');
+      const lastDot = t.lastIndexOf('.');
+      t = lastComma > lastDot ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+    } else if (t.includes(',')) {
+      t = t.replace(',', '.');
+    }
+    if (/^[-+]?\d+[.]$/.test(t)) return;
+    const amt = Number(t);
+
+    // Canonicalize category (case-insensitive) and persist to LS
+    const catCanon = canonicalizeCategory(category, categories);
+    if (catCanon) saveCategoriesLS([...categories, catCanon]);
 
     const patch: UpdateTransaction = { id: row.id };
-
     if (iso !== row.date) patch.date = iso;
-    if (amt !== null && amt !== row.amount) patch.amount = amt; // only send if valid + changed
+    if (Number.isFinite(amt) && amt !== row.amount) patch.amount = amt;
     if (accountId !== row.account_id) patch.account_id = accountId;
 
-    const catTrim = (category ?? '').trim();
     const prevCat = row.category ?? '';
-    if (catTrim !== prevCat) patch.category = catTrim || null;
+    if ((catCanon ?? '') !== prevCat) patch.category = catCanon || null;
 
     const notesTrim = (notes ?? '').trim();
     const prevNotes = row.description ?? '';
@@ -132,6 +164,7 @@ function EditableRow({
 
     await onUpdate(patch);
     setEditing(false);
+    invalidateCategories();
   };
 
   return (
@@ -140,7 +173,7 @@ function EditableRow({
       <td className="tabular-nums align-middle">
         {editing ? (
           <input
-            className="input h-8"
+            className="input h-8 w-[120px]"
             placeholder="dd.mm.yyyy"
             value={dateDE}
             onChange={(e) => setDateDE(e.target.value)}
@@ -150,10 +183,14 @@ function EditableRow({
         )}
       </td>
 
-      {/* Category */}
+      {/* Category (chooser + free typing) */}
       <td className="align-middle">
         {editing ? (
-          <input className="input h-8 w-full" placeholder="Category" value={category} onChange={e=>setCategory(e.target.value)} />
+          <CategorySelect
+            value={category}
+            onChange={setCategory}
+            className="input h-8 w-full"
+          />
         ) : (
           row.category || '—'
         )}

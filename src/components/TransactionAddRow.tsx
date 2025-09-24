@@ -1,36 +1,29 @@
 import { useMemo, useState } from 'react';
 import type { Account, NewTransaction } from '../types';
 import { todayDE, parseDateDEToISO } from '../lib/format';
+import CategorySelect from '../components/CategorySelect';
+import { invalidateCategories } from '../hooks/useCategories';
 
-// Local, robust EU/US decimal parser. Returns null if it can't parse.
-function parseAmountString(s: string): number | null {
-  if (s == null) return null;
-  let t = s.trim().replace(/\s/g, '');
-  if (t === '') return null;
-
-  const hasComma = t.includes(',');
-  const hasDot = t.includes('.');
-
-  if (hasComma && hasDot) {
-    const lastComma = t.lastIndexOf(',');
-    const lastDot = t.lastIndexOf('.');
-    if (lastComma > lastDot) {
-      // "1.234,56" -> "1234.56"
-      t = t.replace(/\./g, '').replace(',', '.');
-    } else {
-      // "1,234.56" -> "1234.56"
-      t = t.replace(/,/g, '');
-    }
-  } else if (hasComma) {
-    // "5,12" -> "5.12"
-    t = t.replace(',', '.');
+// ---- local helpers for categories (stored in localStorage) ----
+function loadCategoriesLS(): string[] {
+  try {
+    const raw = localStorage.getItem('categories');
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    return Array.from(new Set(arr)).filter(Boolean);
+  } catch {
+    return [];
   }
-
-  // Guard against dangling decimal like "5." (allow on typing, but not on submit)
-  if (/^[-+]?\d+[.]$/.test(t)) return null;
-
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
+}
+function saveCategoriesLS(list: string[]) {
+  try {
+    localStorage.setItem('categories', JSON.stringify(Array.from(new Set(list)).filter(Boolean)));
+  } catch {}
+}
+function canonicalizeCategory(input: string, options: string[]): string {
+  const t = (input ?? '').trim();
+  if (!t) return '';
+  const hit = options.find(o => o.toLowerCase() === t.toLowerCase());
+  return hit ?? t; // use existing spelling if found, else as typed
 }
 
 export default function TransactionAddRow({
@@ -43,13 +36,10 @@ export default function TransactionAddRow({
   const [dateDE, setDateDE] = useState<string>(todayDE());
   const [category, setCategory] = useState('');
   const [notes, setNotes] = useState('');
-  const [amountStr, setAmountStr] = useState<string>(''); // use string for typing
+  const [amountStr, setAmountStr] = useState<string>('');
   const [accountId, setAccountId] = useState<number>(accounts[0]?.id ?? 1);
-  const reimbursable = useMemo(
-    () => accounts.filter((a) => a.type === 'reimbursable'),
-    [accounts]
-  );
   const [reimId, setReimId] = useState<number | ''>('');
+  const categories = useMemo(() => loadCategoriesLS(), []); // suggestions
 
   const [busy, setBusy] = useState(false);
   const onSubmit = async (e: React.FormEvent) => {
@@ -57,9 +47,22 @@ export default function TransactionAddRow({
     const iso = parseDateDEToISO(dateDE);
     if (!iso) return;
 
-    // Parse the current input string exactly as typed
-    const amt = parseAmountString(amountStr);
-    if (amt === null) return; // invalid/unfinished amount → abort submit silently
+    // Parse amount ("5,12" / "5.12")
+    let t = (amountStr ?? '').trim().replace(/\s/g, '');
+    if (t.includes(',') && t.includes('.')) {
+      const lastComma = t.lastIndexOf(',');
+      const lastDot = t.lastIndexOf('.');
+      t = lastComma > lastDot ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+    } else if (t.includes(',')) {
+      t = t.replace(',', '.');
+    }
+    if (/^[-+]?\d+[.]$/.test(t)) return; // unfinished like "5."
+    const amt = Number(t);
+    if (!Number.isFinite(amt)) return;
+
+    // Canonicalize category and store to LS for future suggestions
+    const cat = canonicalizeCategory(category, categories);
+    if (cat) saveCategoriesLS([...categories, cat]);
 
     setBusy(true);
     try {
@@ -67,12 +70,12 @@ export default function TransactionAddRow({
         account_id: accountId,
         date: iso,
         description: notes.trim() || null,
-        amount: amt, // <-- send parsed number (no fallback to 0)
-        category: category.trim() || null,
+        amount: amt,
+        category: cat || null,
         reimbursement_account_id: reimId === '' ? null : Number(reimId),
       });
-      // Reset
       setCategory('');
+      invalidateCategories();
       setNotes('');
       setAmountStr('');
       setReimId('');
@@ -90,11 +93,11 @@ export default function TransactionAddRow({
         value={dateDE}
         onChange={(e) => setDateDE(e.target.value)}
       />
-      <input
+      {/* Category with chooser (datalist) */}
+      <CategorySelect
         className="input col-span-2"
-        placeholder="Category"
         value={category}
-        onChange={(e) => setCategory(e.target.value)}
+        onChange={setCategory}
       />
       <input
         className="input col-span-3"
@@ -128,7 +131,7 @@ export default function TransactionAddRow({
         onChange={(e) => setReimId(e.target.value === '' ? '' : parseInt(e.target.value))}
       >
         <option value="">—</option>
-        {reimbursable.map((a) => (
+        {accounts.filter(a => a.type === 'reimbursable').map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
           </option>

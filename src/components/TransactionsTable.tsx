@@ -3,6 +3,32 @@ import Amount from './Amount';
 import { formatDate, parseDateDEToISO } from '../lib/format';
 import type { Account, Transaction, UpdateTransaction } from '../types';
 
+// Local, robust EU/US decimal parser. Returns null if it can't parse.
+function parseAmountString(s: string): number | null {
+  if (s == null) return null;
+  let t = s.trim().replace(/\s/g, '');
+  if (t === '') return null;
+
+  const hasComma = t.includes(',');
+  const hasDot = t.includes('.');
+
+  if (hasComma && hasDot) {
+    const lastComma = t.lastIndexOf(',');
+    const lastDot = t.lastIndexOf('.');
+    if (lastComma > lastDot) {
+      t = t.replace(/\./g, '').replace(',', '.'); // "1.234,56" -> "1234.56"
+    } else {
+      t = t.replace(/,/g, '');                    // "1,234.56" -> "1234.56"
+    }
+  } else if (hasComma) {
+    t = t.replace(',', '.');                      // "5,12" -> "5.12"
+  }
+
+  if (/^[-+]?\d+[.]$/.test(t)) return null;       // unfinished "5."
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function TransactionsTable({
   items,
   accounts,
@@ -24,7 +50,7 @@ export default function TransactionsTable({
     <table className="min-w-full text-sm">
       <thead>
         <tr className="[&>th]:py-2 [&>th]:px-2 text-left border-b border-neutral-200/50 dark:border-neutral-800/50">
-          <th style={{width: 110}}>Date</th>
+          <th style={{width: 120}}>Date</th>
           <th style={{width: 150}}>Category</th>
           <th>Notes</th>
           <th className="text-right" style={{width: 140}}>Value</th>
@@ -64,9 +90,10 @@ function EditableRow({
   const [dateDE, setDateDE] = useState(formatDate(row.date));
   const [category, setCategory] = useState(row.category ?? '');
   const [notes, setNotes] = useState(row.description ?? '');
-  const [amount, setAmount] = useState(row.amount);
+  const [amountStr, setAmountStr] = useState<string>(
+    row.amount != null ? row.amount.toFixed(2).replace('.', ',') : ''
+  ); // keep as string while typing
   const [accountId, setAccountId] = useState<number>(row.account_id);
-  // CHANGED: use number | null (no '' sentinel)
   const [reimId, setReimId] = useState<number | null>(row.reimbursement_account_id ?? null);
 
   const reset = () => {
@@ -74,34 +101,32 @@ function EditableRow({
     setDateDE(formatDate(row.date));
     setCategory(row.category ?? '');
     setNotes(row.description ?? '');
-    setAmount(row.amount);
+    setAmountStr(row.amount != null ? row.amount.toFixed(2).replace('.', ',') : '');
     setAccountId(row.account_id);
-    setReimId(row.reimbursement_account_id ?? null); // CHANGED
+    setReimId(row.reimbursement_account_id ?? null);
   };
 
   const save = async () => {
     if (!onUpdate) return;
     const iso = parseDateDEToISO(dateDE);
-    if (!iso) return; // invalid date; you can toast if desired
+    if (!iso) return;
 
-    // Build a minimal patch so backend doesn't assemble empty SET items.
+    const amt = parseAmountString(amountStr); // parse what the user typed
+
     const patch: UpdateTransaction = { id: row.id };
 
-    // Always include these core fields (or include only if changed—both are fine)
     if (iso !== row.date) patch.date = iso;
-    if (Number.isFinite(amount) && amount !== row.amount) patch.amount = Number(amount) || 0;
+    if (amt !== null && amt !== row.amount) patch.amount = amt; // only send if valid + changed
     if (accountId !== row.account_id) patch.account_id = accountId;
 
-    // Only include category/description if they actually changed
-    const catTrim = category.trim();
+    const catTrim = (category ?? '').trim();
     const prevCat = row.category ?? '';
     if (catTrim !== prevCat) patch.category = catTrim || null;
 
-    const notesTrim = notes.trim();
+    const notesTrim = (notes ?? '').trim();
     const prevNotes = row.description ?? '';
     if (notesTrim !== prevNotes) patch.description = notesTrim || null;
 
-    // Reimbursement: include only if changed; null means "clear"
     const prevReim = row.reimbursement_account_id ?? null;
     if ((reimId ?? null) !== prevReim) patch.reimbursement_account_id = reimId;
 
@@ -146,9 +171,15 @@ function EditableRow({
       {/* Value */}
       <td className="text-right font-medium align-middle">
         {editing ? (
-          <input type="number" step="0.01" className="input h-8 text-right"
-                 value={Number.isFinite(amount) ? amount : 0}
-                 onChange={e=>setAmount(parseFloat(e.target.value))} />
+          <input
+            type="text"
+            inputMode="decimal"
+            pattern="[0-9]*[.,]?[0-9]*"
+            className="input h-8 text-right"
+            placeholder="0,00"
+            value={amountStr}
+            onChange={(e) => setAmountStr(e.target.value)}
+          />
         ) : (
           <Amount value={row.amount} hidden={hidden} colorBySign />
         )}
@@ -170,8 +201,8 @@ function EditableRow({
         {editing ? (
           <select
             className="input w-full"
-            value={reimId ?? ''} // CHANGED
-            onChange={e=>setReimId(e.target.value === '' ? null : parseInt(e.target.value))} // CHANGED
+            value={reimId ?? ''}
+            onChange={e=>setReimId(e.target.value === '' ? null : parseInt(e.target.value))}
           >
             <option value="">—</option>
             {reimbursable.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}

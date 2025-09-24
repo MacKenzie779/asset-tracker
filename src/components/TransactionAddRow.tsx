@@ -2,6 +2,37 @@ import { useMemo, useState } from 'react';
 import type { Account, NewTransaction } from '../types';
 import { todayDE, parseDateDEToISO } from '../lib/format';
 
+// Local, robust EU/US decimal parser. Returns null if it can't parse.
+function parseAmountString(s: string): number | null {
+  if (s == null) return null;
+  let t = s.trim().replace(/\s/g, '');
+  if (t === '') return null;
+
+  const hasComma = t.includes(',');
+  const hasDot = t.includes('.');
+
+  if (hasComma && hasDot) {
+    const lastComma = t.lastIndexOf(',');
+    const lastDot = t.lastIndexOf('.');
+    if (lastComma > lastDot) {
+      // "1.234,56" -> "1234.56"
+      t = t.replace(/\./g, '').replace(',', '.');
+    } else {
+      // "1,234.56" -> "1234.56"
+      t = t.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // "5,12" -> "5.12"
+    t = t.replace(',', '.');
+  }
+
+  // Guard against dangling decimal like "5." (allow on typing, but not on submit)
+  if (/^[-+]?\d+[.]$/.test(t)) return null;
+
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function TransactionAddRow({
   accounts,
   onAdd,
@@ -12,7 +43,7 @@ export default function TransactionAddRow({
   const [dateDE, setDateDE] = useState<string>(todayDE());
   const [category, setCategory] = useState('');
   const [notes, setNotes] = useState('');
-  const [amount, setAmount] = useState<number>(0);
+  const [amountStr, setAmountStr] = useState<string>(''); // use string for typing
   const [accountId, setAccountId] = useState<number>(accounts[0]?.id ?? 1);
   const reimbursable = useMemo(
     () => accounts.filter((a) => a.type === 'reimbursable'),
@@ -24,20 +55,26 @@ export default function TransactionAddRow({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const iso = parseDateDEToISO(dateDE);
-    if (!iso) return; // silently ignore invalid date; you can show a toast if you want
+    if (!iso) return;
+
+    // Parse the current input string exactly as typed
+    const amt = parseAmountString(amountStr);
+    if (amt === null) return; // invalid/unfinished amount → abort submit silently
+
     setBusy(true);
     try {
       await onAdd({
         account_id: accountId,
         date: iso,
         description: notes.trim() || null,
-        amount: Number(amount) || 0,
+        amount: amt, // <-- send parsed number (no fallback to 0)
         category: category.trim() || null,
         reimbursement_account_id: reimId === '' ? null : Number(reimId),
       });
+      // Reset
       setCategory('');
       setNotes('');
-      setAmount(0);
+      setAmountStr('');
       setReimId('');
       setDateDE(todayDE());
     } finally {
@@ -66,11 +103,13 @@ export default function TransactionAddRow({
         onChange={(e) => setNotes(e.target.value)}
       />
       <input
-        type="number"
-        step="0.01"
+        type="text"
+        inputMode="decimal"
+        pattern="[0-9]*[.,]?[0-9]*"
         className="input col-span-2 text-right"
-        value={Number.isFinite(amount) ? amount : 0}
-        onChange={(e) => setAmount(parseFloat(e.target.value))}
+        placeholder="0,00"
+        value={amountStr}
+        onChange={(e) => setAmountStr(e.target.value)}
       />
       <select
         className="input col-span-2"

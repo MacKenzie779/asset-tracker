@@ -2,30 +2,8 @@ import { useMemo, useState } from 'react';
 import Amount from './Amount';
 import { formatDate, parseDateDEToISO } from '../lib/format';
 import type { Account, Transaction, UpdateTransaction } from '../types';
-import CategorySelect from '../components/CategorySelect';
+import CategorySelect from './CategorySelect';
 import { invalidateCategories } from '../hooks/useCategories';
-
-// ---- local helpers for categories (merge from items + localStorage) ----
-function loadCategoriesLS(): string[] {
-  try {
-    const raw = localStorage.getItem('categories');
-    const arr = raw ? (JSON.parse(raw) as string[]) : [];
-    return Array.from(new Set(arr)).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-function saveCategoriesLS(list: string[]) {
-  try {
-    localStorage.setItem('categories', JSON.stringify(Array.from(new Set(list)).filter(Boolean)));
-  } catch {}
-}
-function canonicalizeCategory(input: string, options: string[]): string {
-  const t = (input ?? '').trim();
-  if (!t) return '';
-  const hit = options.find(o => o.toLowerCase() === t.toLowerCase());
-  return hit ?? t;
-}
 
 export default function TransactionsTable({
   items,
@@ -43,36 +21,16 @@ export default function TransactionsTable({
   // items come newest-first from backend; we need oldest → newest (newest at bottom)
   const rows = useMemo(() => [...items].reverse(), [items]);
 
-  // Build category list from existing items + any locally stored ones
-  const categories = useMemo(() => {
-    const s = new Set<string>();
-    for (const it of items) if (it.category) s.add(it.category);
-    for (const c of loadCategoriesLS()) s.add(c);
-    return Array.from(s).sort((a, b) => a.localeCompare(b, 'de'));
-  }, [items]);
-
-  const reimbursable = useMemo(
-    () => accounts.filter(a => a.type === 'reimbursable'),
-    [accounts]
-  );
-
   return (
     <>
-      <datalist id="categories-list">
-        {categories.map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
-
       <table className="min-w-full text-sm">
         <thead>
           <tr className="[&>th]:py-2 [&>th]:px-2 text-left border-b border-neutral-200/50 dark:border-neutral-800/50">
-            <th style={{ width: 120 }}>Date</th>
-            <th style={{ width: 150 }}>Category</th>
+            <th style={{width: 120}}>Date</th>
+            <th style={{width: 150}}>Category</th>
             <th>Notes</th>
-            <th className="text-right" style={{ width: 140 }}>Value</th>
-            <th style={{ width: 180 }}>Account</th>
-            <th style={{ width: 160 }}>Reimbursement</th>
+            <th className="text-right" style={{width: 140}}>Value</th>
+            <th style={{width: 200}}>Account</th>
             <th className="w-[1%]"></th>
           </tr>
         </thead>
@@ -82,8 +40,6 @@ export default function TransactionsTable({
               key={row.id}
               row={row}
               accounts={accounts}
-              reimbursable={reimbursable}
-              categories={categories}
               hidden={hidden}
               onDelete={onDelete}
               onUpdate={onUpdate}
@@ -96,12 +52,10 @@ export default function TransactionsTable({
 }
 
 function EditableRow({
-  row, accounts, reimbursable, categories, hidden, onDelete, onUpdate
+  row, accounts, hidden, onDelete, onUpdate
 }: {
   row: Transaction;
   accounts: Account[];
-  reimbursable: Account[];
-  categories: string[];            // added
   hidden: boolean;
   onDelete?: (id: number) => void;
   onUpdate?: (patch: UpdateTransaction) => Promise<void>;
@@ -114,7 +68,6 @@ function EditableRow({
     row.amount != null ? row.amount.toFixed(2).replace('.', ',') : ''
   );
   const [accountId, setAccountId] = useState<number>(row.account_id);
-  const [reimId, setReimId] = useState<number | null>(row.reimbursement_account_id ?? null);
 
   const reset = () => {
     setEditing(false);
@@ -123,7 +76,6 @@ function EditableRow({
     setNotes(row.description ?? '');
     setAmountStr(row.amount != null ? row.amount.toFixed(2).replace('.', ',') : '');
     setAccountId(row.account_id);
-    setReimId(row.reimbursement_account_id ?? null);
   };
 
   const save = async () => {
@@ -143,24 +95,18 @@ function EditableRow({
     if (/^[-+]?\d+[.]$/.test(t)) return;
     const amt = Number(t);
 
-    // Canonicalize category (case-insensitive) and persist to LS
-    const catCanon = canonicalizeCategory(category, categories);
-    if (catCanon) saveCategoriesLS([...categories, catCanon]);
-
     const patch: UpdateTransaction = { id: row.id };
     if (iso !== row.date) patch.date = iso;
     if (Number.isFinite(amt) && amt !== row.amount) patch.amount = amt;
     if (accountId !== row.account_id) patch.account_id = accountId;
 
     const prevCat = row.category ?? '';
-    if ((catCanon ?? '') !== prevCat) patch.category = catCanon || null;
+    const catTrim = (category ?? '').trim();
+    if (catTrim !== prevCat) patch.category = catTrim || null;
 
-    const notesTrim = (notes ?? '').trim();
     const prevNotes = row.description ?? '';
+    const notesTrim = (notes ?? '').trim();
     if (notesTrim !== prevNotes) patch.description = notesTrim || null;
-
-    const prevReim = row.reimbursement_account_id ?? null;
-    if ((reimId ?? null) !== prevReim) patch.reimbursement_account_id = reimId;
 
     await onUpdate(patch);
     setEditing(false);
@@ -183,13 +129,13 @@ function EditableRow({
         )}
       </td>
 
-      {/* Category (chooser + free typing) */}
+      {/* Category */}
       <td className="align-middle">
         {editing ? (
           <CategorySelect
+            className="input h-8 w-full"
             value={category}
             onChange={setCategory}
-            className="input h-8 w-full"
           />
         ) : (
           row.category || '—'
@@ -233,23 +179,7 @@ function EditableRow({
         )}
       </td>
 
-      {/* Reimbursement */}
-      <td className="align-middle">
-        {editing ? (
-          <select
-            className="input w-full"
-            value={reimId ?? ''}
-            onChange={e=>setReimId(e.target.value === '' ? null : parseInt(e.target.value))}
-          >
-            <option value="">—</option>
-            {reimbursable.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        ) : (
-          row.reimbursement_account_name || '—'
-        )}
-      </td>
-
-      {/* Icons */}
+      {/* Actions */}
       <td className="align-middle">
         <div className="flex items-center justify-end gap-2">
           {editing ? (

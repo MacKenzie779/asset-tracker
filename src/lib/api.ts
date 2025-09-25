@@ -75,3 +75,12 @@ export async function renameCategory(id: number, name: string): Promise<boolean>
 export async function deleteCategory(id: number): Promise<boolean> {
   return invoke<boolean>('delete_category', { id });
 }
+
+// at top, with the others:
+export type TxMini = { account_id: number; date: string; amount: number };
+
+// ...
+
+export async function listTransactionsAll(): Promise<TxMini[]> {
+  return invoke<TxMini[]>('list_transactions_all');
+}

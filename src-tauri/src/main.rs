@@ -1804,6 +1804,28 @@ async fn delete_category(state: State<'_, AppState>, id: i64) -> Result<bool, St
   Ok(res.rows_affected() > 0)
 }
 
+// Add near your other output structs
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TxMini {
+  account_id: i64,
+  date: String,   // YYYY-MM-DD
+  amount: f64,
+}
+
+#[tauri::command]
+async fn list_transactions_all(state: tauri::State<'_, AppState>) -> Result<Vec<TxMini>, String> {
+  sqlx::query_as::<_, TxMini>(
+    r#"
+    SELECT t.account_id, t.date, t.amount
+    FROM transactions t
+    ORDER BY DATE(t.date) ASC, t.id ASC
+    "#
+  )
+  .fetch_all(&state.pool)
+  .await
+  .map_err(|e| e.to_string())
+}
+
 
 /* ---------- App setup ---------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1842,7 +1864,7 @@ update_category,
 delete_category,
       // search/export
       search_transactions, export_transactions_xlsx, export_transactions_pdf, export_reimbursable_report_xlsx,
-      export_reimbursable_report_pdf,
+      export_reimbursable_report_pdf, list_transactions_all
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

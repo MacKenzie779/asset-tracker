@@ -110,7 +110,13 @@ struct TxSearchResult {
   offset: i64,      // effective offset used (for page calc in UI)
   sum_income: f64,
   sum_expense: f64,
+  // NEW: global sums split by account type (respect current filters, ignore paging)
+  sum_income_std: f64,
+  sum_expense_std: f64,
+  sum_income_reimb: f64,
+  sum_expense_reimb: f64,
 }
+
 
 /* ---------- Categories (DB-level unique) ---------- */
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -514,26 +520,43 @@ async fn search_transactions(
   let items = q_items.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
 
   // Sums
+  /* ---------- Sums (global across all results, not current page) ---------- */
   let mut sql_sums = String::from(
     "SELECT \
        COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount END), 0.0) AS income, \
-       COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0.0) AS expense \
+       COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0.0) AS expense, \
+       COALESCE(SUM(CASE WHEN a.type = 'standard'     AND t.amount > 0 THEN t.amount END), 0.0) AS inc_std, \
+       COALESCE(SUM(CASE WHEN a.type = 'standard'     AND t.amount < 0 THEN t.amount END), 0.0) AS exp_std, \
+       COALESCE(SUM(CASE WHEN a.type = 'reimbursable' AND t.amount > 0 THEN t.amount END), 0.0) AS inc_reimb, \
+       COALESCE(SUM(CASE WHEN a.type = 'reimbursable' AND t.amount < 0 THEN t.amount END), 0.0) AS exp_reimb \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id"
   );
   sql_sums.push_str(&where_sql);
 
-  let mut q_sums = sqlx::query_as::<_, (f64, f64)>(&sql_sums);
+  let mut q_sums = sqlx::query_as::<_, (f64, f64, f64, f64, f64, f64)>(&sql_sums);
   for a in &args {
     match a {
       BindArg::I(v) => { q_sums = q_sums.bind(*v); }
       BindArg::S(s) => { q_sums = q_sums.bind(s); }
     }
   }
-  let (sum_income, sum_expense) = q_sums.fetch_one(&state.pool).await.map_err(|e| e.to_string())?;
+  let (sum_income, sum_expense, inc_std, exp_std, inc_reimb, exp_reimb)
+    = q_sums.fetch_one(&state.pool).await.map_err(|e| e.to_string())?;
 
-  Ok(TxSearchResult { items, total, offset: effective_offset, sum_income, sum_expense })
+
+    Ok(TxSearchResult {
+    items,
+    total,
+    offset: effective_offset,
+    sum_income,
+    sum_expense,
+    sum_income_std: inc_std,
+    sum_expense_std: exp_std,
+    sum_income_reimb: inc_reimb,
+    sum_expense_reimb: exp_reimb,
+  })
 }
 
 #[tauri::command]

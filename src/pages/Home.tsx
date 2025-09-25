@@ -45,16 +45,21 @@ export default function Home() {
     refresh();
   }, []);
 
-  const totalBalance = useMemo(
-    () => accounts.reduce((s, a) => s + (Number.isFinite(a.balance) ? a.balance : 0), 0),
-    [accounts]
-  );
+  const totalBalance = useMemo(() => {
+    return accounts.reduce((sum, a) => {
+      const v = Number.isFinite(a.balance) ? a.balance : 0;
+      return sum + (a.type === 'reimbursable' ? -v : v);
+    }, 0);
+  }, [accounts]);
 
-  const biggestExpense = useMemo(() => {
-    let min = 0;
-    for (const tr of tx) if (tr.amount < min) min = tr.amount;
-    return min;
-  }, [tx]);
+
+  // NEW: Sum of negative balances (as positive) for all reimbursable accounts.
+  // Shows how much you're currently owed.
+  const toBeReimbursed = useMemo(() => {
+    return accounts
+      .filter(a => a.type === 'reimbursable')
+      .reduce((sum, a) => sum + (a.balance < 0 ? -a.balance : 0), 0);
+  }, [accounts]);
 
   const handleAddTx = async (input: NewTransaction) => {
     await addTransaction(input);
@@ -85,10 +90,11 @@ export default function Home() {
           </div>
         </div>
 
+        {/* REPLACED: Biggest Expense → To be reimbursed */}
         <div className="card p-5">
-          <p className="text-xs text-neutral-500">Biggest Expense</p>
+          <p className="text-xs text-neutral-500">To be reimbursed</p>
           <div className="mt-1 text-3xl md:text-4xl font-bold">
-            <Amount value={biggestExpense} hidden={hidden} colorBySign />
+            <Amount value={toBeReimbursed} hidden={hidden} />
           </div>
         </div>
       </section>

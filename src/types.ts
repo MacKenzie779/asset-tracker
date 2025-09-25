@@ -75,7 +75,13 @@ export type TransactionSearch = {
 export type TransactionSearchResult = {
   items: Transaction[];
   total: number;
-  offset: number;      // effective offset (server-computed)
+  offset: number;
   sum_income: number;
   sum_expense: number;
+  // NEW (global sums split by account type)
+  sum_income_std?: number;
+  sum_expense_std?: number;
+  sum_income_reimb?: number;
+  sum_expense_reimb?: number;
 };
+

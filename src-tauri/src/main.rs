@@ -519,8 +519,10 @@ async fn search_transactions(
   q_items = q_items.bind(limit).bind(effective_offset);
   let items = q_items.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
 
-  // Sums
-  /* ---------- Sums (global across all results, not current page) ---------- */
+  /* ---------- Sums (global across all results, not current page) ----------
+     Exclude category = 'Transfer' (case-insensitive) because internal transfers
+     don’t change net income/expense.
+  */
   let mut sql_sums = String::from(
     "SELECT \
        COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount END), 0.0) AS income, \
@@ -533,7 +535,12 @@ async fn search_transactions(
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id"
   );
-  sql_sums.push_str(&where_sql);
+
+  // Start from the same WHERE (filters), then add "not transfer" for sums only
+  let mut where_sums = where_sql.clone();
+  where_sums.push_str(" AND LOWER(COALESCE(c.name, t.category, '')) <> 'transfer' ");
+
+  sql_sums.push_str(&where_sums);
 
   let mut q_sums = sqlx::query_as::<_, (f64, f64, f64, f64, f64, f64)>(&sql_sums);
   for a in &args {
@@ -542,6 +549,7 @@ async fn search_transactions(
       BindArg::S(s) => { q_sums = q_sums.bind(s); }
     }
   }
+
   let (sum_income, sum_expense, inc_std, exp_std, inc_reimb, exp_reimb)
     = q_sums.fetch_one(&state.pool).await.map_err(|e| e.to_string())?;
 

@@ -27,7 +27,7 @@ import type {
 import Amount from '../components/Amount';
 import ConfirmDialog from '../components/ConfirmDialog';
 import BasicSelect from '../components/BasicSelect';
-import AccountSelectTx from './transactions/AccountSelectTx';
+import AccountSelectTx from '../components/transactions/AccountSelectTx';
 import TransactionTableTx from '../components/TransactionTableTx';
 
 type OutletCtx = { hidden: boolean };
@@ -298,6 +298,38 @@ export default function Transactions() {
 
   const reimbursableDisabled = !account_id || !isReimbursableSelected;
 
+    // ----- better pagination helpers -----
+  const goToPage = (p: number) => {
+    const clamped = Math.max(1, Math.min(totalPages, p));
+    setFilters(prev => {
+      const newOffset = (clamped - 1) * (prev.limit ?? PAGE_SIZE);
+      return (prev.offset ?? 0) === newOffset ? prev : { ...prev, offset: newOffset };
+    });
+  };
+
+  // page items: [1, '…', 9, 10, 11, '…', 50] depending on current page
+  const pageItems = useMemo<(number | '…')[]>(() => {
+    const total = totalPages;
+    const cur = page;
+
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    const items: (number | '…')[] = [];
+    const left = Math.max(2, cur - 1);
+    const right = Math.min(total - 1, cur + 1);
+
+    items.push(1);
+    if (left > 2) items.push('…');
+    for (let i = left; i <= right; i++) items.push(i);
+    if (right < total - 1) items.push('…');
+    items.push(total);
+
+    return items;
+  }, [page, totalPages]);
+
+
   return (
     <div className="px-3 sm:px-4 md:px-6 pt-4 grid gap-6 2xl:grid-cols-[minmax(1280px,1fr)_minmax(60px,480px)]">
       {/* Left column */}
@@ -450,33 +482,46 @@ export default function Transactions() {
           <div className="text-xs text-neutral-500">
             {data.total} result{data.total === 1 ? '' : 's'} • Page {page} / {totalPages}
           </div>
-          <div className="flex gap-2">
+
+          <div className="flex items-center gap-1">
             <button
               className="btn h-8 px-3"
-              disabled={data.offset <= 0 || loading}
-              onClick={() =>
-                setFilters(prev => {
-                  const next = Math.max(0, data.offset - (prev.limit ?? PAGE_SIZE));
-                  return (prev.offset ?? 0) === next ? prev : { ...prev, offset: next };
-                })
-              }
+              disabled={page <= 1 || loading}
+              onClick={() => goToPage(page - 1)}
             >
               Prev
             </button>
+
+            {/* numbered buttons */}
+            {pageItems.map((it, idx) =>
+              it === '…' ? (
+                <span key={`dots-${idx}`} className="px-1 text-neutral-500 select-none">…</span>
+              ) : (
+                <button
+                  key={it}
+                  className={[
+                    'btn h-8 w-8 px-0',
+                    it === page ? 'btn-primary' : ''
+                  ].join(' ')}
+                  disabled={loading || it === page}
+                  aria-current={it === page ? 'page' : undefined}
+                  onClick={() => goToPage(it)}
+                >
+                  {it}
+                </button>
+              )
+            )}
+
             <button
               className="btn h-8 px-3"
-              disabled={data.offset + (limit ?? PAGE_SIZE) >= (data.total ?? 0) || loading}
-              onClick={() =>
-                setFilters(prev => {
-                  const next = data.offset + (prev.limit ?? PAGE_SIZE);
-                  return (prev.offset ?? 0) === next ? prev : { ...prev, offset: next };
-                })
-              }
+              disabled={page >= totalPages || loading}
+              onClick={() => goToPage(page + 1)}
             >
               Next
             </button>
           </div>
         </div>
+
       </div>
 
       {/* Right column: Export */}

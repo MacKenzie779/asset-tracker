@@ -25,3 +25,9 @@ printpdf = "0.5"
 lto = true
 codegen-units = 1
 opt-level = "s"
+
+[features]
+# Used by Tauri CLI for production builds to load assets via a custom protocol.
+# Forwards to the tauri crate's feature of the same name (Tauri v1).
+custom-protocol = ["tauri/custom-protocol"]
+default = []

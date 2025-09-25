@@ -5,7 +5,7 @@ import Home from './pages/Home';
 import Accounts from './pages/Accounts';
 import Transactions from './pages/Transactions';
 import Stats from './pages/Stats';
-import Settings from './pages/Settings';
+import Categories from './pages/Categories';
 
 export default function App() {
   return (
@@ -16,7 +16,7 @@ export default function App() {
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/stats" element={<Stats />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/categories" element={<Categories />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

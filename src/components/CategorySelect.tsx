@@ -46,26 +46,26 @@ export default function CategorySelect({
     };
   }, [open]);
 
+  // Filtered list (existing categories only)
   const list = useMemo(() => {
     const q = (query ?? '').trim().toLowerCase();
     const base = q ? categories.filter(c => c.toLowerCase().includes(q)) : categories;
-    const exists = categories.some(c => c.toLowerCase() === q && q.length > 0);
-    const items = [...base];
-    // Put "Create …" at the END
-    if (q && !exists) items.push(`Create “${query}”`);
-    return items.slice(0, 12);
+    return base.slice(0, 12);
   }, [categories, query]);
 
-  useEffect(() => {
-    setHighlight(0);
-  }, [query, open]);
+  useEffect(() => { setHighlight(0); }, [query, open]);
 
   const choose = (text: string) => {
-    const isCreate = text.startsWith('Create “');
-    const v = isCreate ? text.slice(8, -1) : text; // between the quotes
-    onChange(v);
-    setQuery(v);
+    // Only accept selections from existing list items
+    onChange(text);
+    setQuery(text);
     setOpen(false);
+  };
+
+  // Does the typed query exactly match an existing category (case-insensitive)?
+  const queryMatchesExisting = () => {
+    const q = (query ?? '').trim().toLowerCase();
+    return categories.find(c => c.toLowerCase() === q) ?? null;
   };
 
   return (
@@ -85,9 +85,18 @@ export default function CategorySelect({
           if (e.key === 'Escape')    { setOpen(false); }
         }}
         onBlur={() => {
-          // keep value; backend normalizes/canonicalizes by NOCASE
-          // we don't close here to allow click via mousedown in the menu
-          setTimeout(() => setOpen(false), 120);
+          // If typed value isn't an existing category, revert to previous prop value
+          setTimeout(() => {
+            const exact = queryMatchesExisting();
+            if (exact) {
+              // normalize casing if needed
+              setQuery(exact);
+              if (exact !== value) onChange(exact);
+            } else {
+              setQuery(value ?? '');
+            }
+            setOpen(false);
+          }, 120);
         }}
       />
 
@@ -106,20 +115,19 @@ export default function CategorySelect({
           <ul className="max-h-64 overflow-auto py-1">
             {list.map((item, idx) => {
               const active = idx === highlight;
-              const isCreate = item.startsWith('Create “');
               return (
                 <li
                   key={item + idx}
                   className={[
-                    'px-3 py-2 cursor-pointer text-sm flex items-center justify-between',
+                    'px-3 py-2 cursor-pointer text-sm',
+                    'flex items-center justify-between',
                     active ? 'bg-neutral-100 dark:bg-neutral-800' : '',
                   ].join(' ')}
                   // use mousedown so blur on input doesn't kill the click
                   onMouseDown={(e) => { e.preventDefault(); choose(item); }}
                   onMouseEnter={() => setHighlight(idx)}
                 >
-                  <span className={isCreate ? 'italic' : ''}>{item}</span>
-                  {isCreate && <span className="text-xs opacity-60">new</span>}
+                  <span>{item}</span>
                 </li>
               );
             })}

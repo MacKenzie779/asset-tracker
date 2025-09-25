@@ -18,8 +18,9 @@ export default function Layout() {
 
   const title =
     loc.pathname === '/' ? 'Home' :
-    loc.pathname.startsWith('/accounts') ? 'Accounts' :
     loc.pathname.startsWith('/transactions') ? 'Transactions' :
+    loc.pathname.startsWith('/accounts') ? 'Accounts' :
+    loc.pathname.startsWith('/categories') ? 'Categories' :  // ← added
     loc.pathname.startsWith('/stats') ? 'Stats' :
     'Settings';
 
@@ -35,9 +36,9 @@ export default function Layout() {
         <nav className="flex-1 py-2">
           <NavItem to="/" active={loc.pathname === '/'} label="Home" icon={IconHome} />
           <NavItem to="/transactions" active={loc.pathname.startsWith('/transactions')} label="Transactions" icon={IconArrows} />
+          <NavItem to="/categories" active={loc.pathname.startsWith('/categories')} label="Categories" icon={IconTag} />
           <NavItem to="/accounts" active={loc.pathname.startsWith('/accounts')} label="Accounts" icon={IconWallet} />
           <NavItem to="/stats" active={loc.pathname.startsWith('/stats')} label="Stats" icon={IconChart} />
-          <NavItem to="/settings" active={loc.pathname.startsWith('/settings')} label="Settings" icon={IconCog} />
         </nav>
 
         {/* Optional: sidebar footer area (profile/version/etc.) */}
@@ -107,4 +108,13 @@ function IconChart({ className='' }) {
 }
 function IconCog({ className='' }) {
   return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3" strokeWidth="1.8"/><path d="M19 12a7 7 0 0 0-.16-1.5l2.11-1.64-2-3.46-2.5 1A7 7 0 0 0 14.5 4l-.5-3h-4l-.5 3a7 7 0 0 0-1.95 1.4l-2.5-1-2 3.46L5.16 10.5A7 7 0 0 0 5 12c0 .51.06 1.01.16 1.5l-2.11 1.64 2 3.46 2.5-1c.57.56 1.24 1.02 1.95 1.4l.5 3h4l.5-3a7 7 0 0 0 1.95-1.4l2.5 1 2-3.46-2.11-1.64c.1-.49.16-.99.16-1.5Z" strokeWidth="1.2"/></svg>;
+}
+/* NEW */
+function IconTag({ className='' }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor">
+      <path d="M20 12l-8 8-8-8V4h8l8 8z" strokeWidth="1.8"/>
+      <circle cx="9.5" cy="8.5" r="1.3" />
+    </svg>
+  );
 }

@@ -9,12 +9,12 @@ export type Account = {
   name: string;
   type: AccountType;
   color?: string | null;
-  balance?: number;
+  balance: number;
 };
 
 export type NewAccount = {
   name: string;
-  type?: AccountType;
+  account_type?: AccountType;
   color?: string | null;
   initial_balance?: number;
 };

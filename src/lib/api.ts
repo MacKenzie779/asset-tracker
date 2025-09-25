@@ -56,3 +56,22 @@ export async function exportReimbursableReportXlsx(filters: TransactionSearch, c
 export async function exportReimbursableReportPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
   return invoke<string>('export_reimbursable_report_pdf', { filters, columns });
 }
+
+// categories
+import type { Category } from '../types';
+
+export async function listCategories(): Promise<Category[]> {
+  return invoke<Category[]>('list_categories');
+}
+
+export async function addCategory(name: string): Promise<number> {
+  return invoke<number>('add_category', { name });
+}
+
+export async function renameCategory(id: number, name: string): Promise<boolean> {
+  return invoke<boolean>('update_category', { id, name });
+}
+
+export async function deleteCategory(id: number): Promise<boolean> {
+  return invoke<boolean>('delete_category', { id });
+}

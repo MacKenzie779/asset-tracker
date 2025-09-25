@@ -1717,6 +1717,62 @@ async fn export_reimbursable_report_pdf(
   Ok(path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+async fn add_category(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+  let name = name.trim();
+  if name.is_empty() {
+    return Err("Category name cannot be empty".into());
+  }
+  // Insert (ignore duplicates), then fetch id case-insensitively
+  sqlx::query("INSERT OR IGNORE INTO categories(name) VALUES (?)")
+    .bind(name)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  let rec = sqlx::query_scalar::<_, i64>("SELECT id FROM categories WHERE name = ? COLLATE NOCASE")
+    .bind(name)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  Ok(rec)
+}
+
+#[tauri::command]
+async fn update_category(state: State<'_, AppState>, id: i64, name: String) -> Result<bool, String> {
+  let name = name.trim();
+  if name.is_empty() {
+    return Err("Category name cannot be empty".into());
+  }
+  let res = sqlx::query("UPDATE categories SET name = ? WHERE id = ?")
+    .bind(name)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(res.rows_affected() > 0)
+}
+
+#[tauri::command]
+async fn delete_category(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+  // Only allow delete when not referenced by transactions
+  let cnt: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE category_id = ?")
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+  if cnt > 0 {
+    return Err("Category is in use by one or more transactions.".into());
+  }
+  let res = sqlx::query("DELETE FROM categories WHERE id = ?")
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(res.rows_affected() > 0)
+}
+
 
 /* ---------- App setup ---------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1750,7 +1806,9 @@ pub fn run() {
       // finance
       add_account, list_accounts, list_transactions, add_transaction, update_transaction, delete_transaction, delete_account, update_account,
       // categories
-      list_categories,
+      list_categories, add_category,
+update_category,
+delete_category,
       // search/export
       search_transactions, export_transactions_xlsx, export_transactions_pdf, export_reimbursable_report_xlsx,
       export_reimbursable_report_pdf,

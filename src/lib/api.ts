@@ -1,4 +1,3 @@
-// src/lib/api.ts
 import { invoke } from '@tauri-apps/api/tauri';
 import type {
   Account, NewAccount, UpdateAccount,
@@ -46,7 +45,14 @@ export async function searchTransactions(filters: TransactionSearch): Promise<Tr
 export async function exportTransactionsXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
   return invoke<string>('export_transactions_xlsx', { filters, columns });
 }
-/* NEW: PDF export */
 export async function exportTransactionsPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
   return invoke<string>('export_transactions_pdf', { filters, columns });
+}
+
+/* NEW: reimbursable window exports */
+export async function exportReimbursableReportXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
+  return invoke<string>('export_reimbursable_report_xlsx', { filters, columns });
+}
+export async function exportReimbursableReportPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
+  return invoke<string>('export_reimbursable_report_pdf', { filters, columns });
 }

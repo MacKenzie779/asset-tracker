@@ -58,7 +58,7 @@ struct AccountOut {
   balance: f64,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, Clone)]
 struct TransactionOut {
   id: i64,
   account_id: i64,
@@ -1218,6 +1218,506 @@ fn clip_for_width_with_font(
     out
 }
 
+/// Compute the open reimbursement window for a reimbursable account.
+///
+/// Returns:
+/// - account_name
+/// - current_balance (final running sum over all tx)
+/// - carry_at_cut (>=0): positive balance at the cut point that must be applied to subsequent expenses
+/// - slice_oldest_first: transactions *after* the cut, in the natural order (oldest → newest)
+async fn compute_reimbursable_slice(
+    pool: &SqlitePool,
+    account_id: i64,
+) -> Result<(String, f64, f64, Vec<TransactionOut>), String> {
+    // Ensure account exists + type + current balance
+    let (acc_name, acc_type, _balance): (String, String, f64) = sqlx::query_as(
+        r#"
+        SELECT a.name, a.type, COALESCE(SUM(t.amount), 0.0) AS balance
+        FROM accounts a
+        LEFT JOIN transactions t ON t.account_id = a.id
+        WHERE a.id = ?1
+        GROUP BY a.id
+        "#,
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Account not found".to_string())?;
+
+    if acc_type.to_lowercase() != "reimbursable" {
+        return Err("This export requires a reimbursable account".into());
+    }
+
+    // Load all tx for this account (oldest→newest)
+    let oldest_first = sqlx::query_as::<_, TransactionOut>(
+        r#"
+        SELECT
+          t.id, t.account_id, a.name AS account_name, a.color AS account_color,
+          t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount
+        FROM transactions t
+        JOIN accounts a ON a.id = t.account_id
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.account_id = ?1
+        ORDER BY DATE(t.date) ASC, t.id ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Running balance to find the last moment the balance was >= 0
+    let mut running = 0.0f64;
+    let mut last_non_neg_idx: isize = -1;
+    let mut carry_at_cut: f64 = 0.0;
+    for (i, it) in oldest_first.iter().enumerate() {
+        running += it.amount;
+        if running >= 0.0 {
+            last_non_neg_idx = i as isize;
+            carry_at_cut = running; // could be > 0
+        }
+    }
+
+    // Slice AFTER that index (these are candidates), keep order oldest → newest
+    let slice_oldest_first: Vec<TransactionOut> = if (last_non_neg_idx as usize) + 1 <= oldest_first.len() {
+        oldest_first[(last_non_neg_idx as usize + 1)..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok((acc_name, running /*current_balance*/, carry_at_cut, slice_oldest_first))
+}
+
+
+#[tauri::command]
+async fn export_reimbursable_report_xlsx(
+  state: tauri::State<'_, AppState>,
+  filters: TxSearch,
+  columns: Option<Vec<String>>,
+) -> Result<String, String> {
+  use chrono::{Datelike, Local, NaiveDate};
+  use rust_xlsxwriter::{Color, ExcelDateTime, Format, Workbook};
+
+  let acc_id = filters.account_id.ok_or("Filter to a reimbursable account first")?;
+  let (account_label, _current_balance, mut carry_at_cut, items_oldest) =
+      compute_reimbursable_slice(&state.pool, acc_id).await?;
+
+  // Columns (stable order)
+  let mut cols = columns.unwrap_or_else(|| {
+    vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()]
+  });
+  if cols.is_empty() {
+    cols = vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()];
+  }
+  let order = ["date", "account", "category", "description", "amount"];
+  cols.sort_by_key(|k| order.iter().position(|x| x == &k.as_str()).unwrap_or(999));
+
+  // Build adjusted rows (keep order oldest→newest, apply carry & mark partials)
+  struct RowRef<'a> { it: &'a TransactionOut, adj_amount: f64, partial_note: Option<String> }
+  let mut rows: Vec<RowRef<'_>> = Vec::new();
+
+  for it in &items_oldest {
+    if it.amount < 0.0 {
+      if carry_at_cut > 0.0 {
+        let can_apply = carry_at_cut.min((-it.amount).max(0.0));
+        let adj = it.amount + can_apply;       // closer to 0 (less negative)
+        carry_at_cut -= can_apply;
+        if adj.abs() < 1e-9 {
+          continue; // fully covered
+        } else {
+          let note = format!(
+            "(partial: {} € of {} €)",
+            format_amount_eu((-adj).max(0.0)),
+            format_amount_eu(-it.amount)
+          );
+          rows.push(RowRef { it, adj_amount: adj, partial_note: Some(note) });
+        }
+      } else {
+        rows.push(RowRef { it, adj_amount: it.amount, partial_note: None });
+      }
+    } else if it.amount > 0.0 {
+      carry_at_cut += it.amount; // reimbursements after the cut reduce later expenses
+    }
+  }
+
+  // Period from included rows
+  let (period_from, period_to) = if rows.is_empty() {
+    (None, None)
+  } else {
+    (Some(rows.first().unwrap().it.date.clone()), Some(rows.last().unwrap().it.date.clone()))
+  };
+
+  // Pretty dd.mm.yyyy
+  let fmt_dmy = |s: &str| -> String {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+      .map(|d| format!("{:02}.{:02}.{:04}", d.day(), d.month(), d.year()))
+      .unwrap_or_else(|_| s.to_string())
+  };
+  let time_span_label = match (period_from.as_deref(), period_to.as_deref()) {
+    (Some(df), Some(dt)) => format!("{} – {}", fmt_dmy(df), fmt_dmy(dt)),
+    (Some(df), None)     => format!("since {}", fmt_dmy(df)),
+    (None, Some(dt))     => format!("until {}", fmt_dmy(dt)),
+    _                    => "—".to_string(),
+  };
+
+  // File path
+  let download_dir = tauri::api::path::download_dir().ok_or("No downloads directory")?;
+  let ts = Local::now().format("%Y%m%d").to_string();
+  let safe_name: String = account_label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+  let path = std::path::PathBuf::from(download_dir).join(format!("reimbursable_{}_{}.xlsx", safe_name, ts));
+
+  // Workbook + formats (match normal exporter)
+  let mut wb = Workbook::new();
+  let sheet = wb.add_worksheet();
+
+  let title_fmt  = Format::new().set_bold().set_font_size(14);
+  let label_fmt  = Format::new().set_bold();
+  let header_fmt = Format::new().set_bold();
+  let date_fmt   = Format::new().set_num_format("dd.mm.yyyy");
+
+  let money_fmt_pos  = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0x1B5E20));
+  let money_fmt_neg  = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0xB71C1C));
+  let money_fmt_zero = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0x424242));
+  let pick_money_fmt = |v: f64| if v > 0.0 { &money_fmt_pos } else if v < 0.0 { &money_fmt_neg } else { &money_fmt_zero };
+
+  let generated_at = Local::now().format("%d.%m.%Y %H:%M").to_string();
+  let mut current_row: u32 = 0;
+
+  sheet.write_string_with_format(current_row, 0, "Reimbursable report", &title_fmt).map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Account", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &account_label).map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Period", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &time_span_label).map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Generated", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &generated_at).map_err(|e| e.to_string())?;
+  current_row += 2;
+
+  // Header
+  let table_start_row = current_row;
+  for (i, key) in cols.iter().enumerate() {
+    let label = match key.as_str() {
+      "date" => "Date", "account" => "Account", "category" => "Category",
+      "description" => "Notes", "amount" => "Value", _ => key,
+    };
+    sheet.write_string_with_format(table_start_row, i as u16, label, &header_fmt).map_err(|e| e.to_string())?;
+  }
+
+  // Autosize helpers
+  fn display_len_amount(v: f64) -> usize {
+    let abs = v.abs();
+    let whole = abs.trunc() as i128;
+    let digits = whole.to_string().len();
+    let groups = if digits > 3 { (digits - 1) / 3 } else { 0 };
+    let sign = if v < 0.0 { 1 } else { 0 };
+    digits + groups + 3 + 2 + sign
+  }
+  let header_labels: Vec<&str> = cols.iter().map(|k| match k.as_str() {
+    "date" => "Date", "account" => "Account", "category" => "Category",
+    "description" => "Notes", "amount" => "Value", _ => k
+  }).collect();
+  let mut col_widths: Vec<usize> = header_labels.iter().map(|s| s.chars().count()).collect();
+
+  // Rows + single TOTAL at end
+  let mut total_outstanding = 0.0f64; // will be <= 0.0
+
+  for (r_idx, row) in rows.iter().enumerate() {
+    let rownum = table_start_row + 1 + r_idx as u32;
+
+    for (c, key) in cols.iter().enumerate() {
+      match key.as_str() {
+        "date" => {
+          if let Ok(nd) = NaiveDate::parse_from_str(&row.it.date, "%Y-%m-%d") {
+            let y: u16 = u16::try_from(nd.year()).map_err(|_| "Year out of range")?;
+            let m: u8  = u8::try_from(nd.month()).map_err(|_| "Month out of range")?;
+            let d: u8  = u8::try_from(nd.day()).map_err(|_| "Day out of range")?;
+            let dt = ExcelDateTime::from_ymd(y, m, d).map_err(|e| e.to_string())?;
+            sheet.write_datetime_with_format(rownum, c as u16, &dt, &date_fmt).map_err(|e| e.to_string())?;
+          } else {
+            sheet.write_string(rownum, c as u16, &row.it.date).map_err(|e| e.to_string())?;
+          }
+          col_widths[c] = col_widths[c].max(10);
+        }
+        "account" => {
+          sheet.write_string(rownum, c as u16, &row.it.account_name).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(row.it.account_name.chars().count());
+        }
+        "category" => {
+          let s = row.it.category.as_deref().unwrap_or("");
+          sheet.write_string(rownum, c as u16, s).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(s.chars().count());
+        }
+        "description" => {
+          let base = row.it.description.as_deref().unwrap_or("");
+          let s = if let Some(note) = &row.partial_note {
+            if base.is_empty() { note.clone() } else { format!("{base} {note}") }
+          } else { base.to_string() };
+          sheet.write_string(rownum, c as u16, &s).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(s.chars().count());
+        }
+        "amount" => {
+          let v = row.adj_amount;
+          let fmt = pick_money_fmt(v);
+          sheet.write_number_with_format(rownum, c as u16, v, fmt).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(display_len_amount(v));
+        }
+        _ => { sheet.write_string(rownum, c as u16, "").map_err(|e| e.to_string())?; }
+      }
+    }
+
+    total_outstanding += row.adj_amount;
+  }
+
+  // --- Single TOTAL line ---
+  let total_row = table_start_row + 1 + rows.len() as u32 + 1;
+  let value_col: u16 = (cols.len().saturating_sub(1)) as u16; // last visible col
+  let label_col: u16 = 0;
+
+  sheet.write_string_with_format(total_row, label_col, "Total", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_number_with_format(total_row, value_col, total_outstanding, pick_money_fmt(total_outstanding)).map_err(|e| e.to_string())?;
+  col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(total_outstanding));
+
+  // Autosize
+  for (c, w) in col_widths.iter().enumerate() {
+    let width = ((*w as f64) + 2.0).min(60.0);
+    sheet.set_column_width(c as u16, width).map_err(|e| e.to_string())?;
+  }
+
+  wb.save(&path).map_err(|e| e.to_string())?;
+  Ok(path.to_string_lossy().to_string())
+}
+
+
+#[tauri::command]
+async fn export_reimbursable_report_pdf(
+  state: tauri::State<'_, AppState>,
+  filters: TxSearch,
+  columns: Option<Vec<String>>,
+) -> Result<String, String> {
+  use printpdf::{PdfDocument, Mm, BuiltinFont, IndirectFontRef};
+  use std::io::{BufWriter, Cursor};
+  use std::fs::File;
+
+  let acc_id = filters.account_id.ok_or("Filter to a reimbursable account first")?;
+  let (account_label, _current_balance, mut carry_at_cut, items_oldest) =
+      compute_reimbursable_slice(&state.pool, acc_id).await?;
+
+  // Columns
+  let cols: Vec<String> = columns.unwrap_or_else(|| {
+    vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()]
+  });
+
+  // Build adjusted rows (same logic as XLSX)
+  struct RowRef<'a> { it: &'a TransactionOut, adj_amount: f64, desc: String }
+  let mut rows: Vec<RowRef<'_>> = Vec::new();
+
+  for it in &items_oldest {
+    if it.amount < 0.0 {
+      if carry_at_cut > 0.0 {
+        let can_apply = carry_at_cut.min((-it.amount).max(0.0));
+        let adj = it.amount + can_apply;
+        carry_at_cut -= can_apply;
+        if adj.abs() < 1e-9 {
+          continue;
+        } else {
+          let base = it.description.as_deref().unwrap_or("").to_string();
+          let note = format!(
+            "(partial: {} € of {} €)",
+            format_amount_eu((-adj).max(0.0)),
+            format_amount_eu(-it.amount)
+          );
+          let desc = if base.is_empty() { note } else { format!("{base} {note}") };
+          rows.push(RowRef { it, adj_amount: adj, desc });
+        }
+      } else {
+        let desc = it.description.as_deref().unwrap_or("").to_string();
+        rows.push(RowRef { it, adj_amount: it.amount, desc });
+      }
+    } else if it.amount > 0.0 {
+      carry_at_cut += it.amount;
+    }
+  }
+
+  // Period
+  let (period_from, period_to) = if rows.is_empty() {
+    (None, None)
+  } else {
+    (Some(rows.first().unwrap().it.date.clone()), Some(rows.last().unwrap().it.date.clone()))
+  };
+
+  // Output path
+  let download_dir = tauri::api::path::download_dir().ok_or("No downloads directory")?;
+  let ts = chrono::Local::now().format("%Y%m%d").to_string();
+  let safe_name: String = account_label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+  let path = std::path::PathBuf::from(download_dir).join(format!("reimbursable_{}_{}.pdf", safe_name, ts));
+
+  // PDF canvas setup
+  let page_w = Mm(210.0);
+  let page_h = Mm(297.0);
+  let m_l = Mm(14.0);
+  let m_r = Mm(14.0);
+  let m_t = Mm(16.0);
+  let m_b = Mm(18.0);
+  let content_w = page_w.0 - m_l.0 - m_r.0;
+
+  let (doc, page_id, layer_id) = PdfDocument::new("Reimbursable Report", page_w, page_h, "Layer 1");
+
+  // fonts
+  fn load_font(doc: &printpdf::PdfDocumentReference, file: &str, fallback: BuiltinFont)
+    -> Result<IndirectFontRef, String>
+  {
+    let path = format!("{}/assets/{}", env!("CARGO_MANIFEST_DIR"), file);
+    match std::fs::read(&path) {
+      Ok(bytes) => doc.add_external_font(Cursor::new(bytes)).map_err(|e| e.to_string()),
+      Err(_)    => doc.add_builtin_font(fallback).map_err(|e| e.to_string()),
+    }
+  }
+  let font_normal = load_font(&doc, "DejaVuSans.ttf", BuiltinFont::Helvetica)?;
+  let font_bold   = load_font(&doc, "DejaVuSans-Bold.ttf", BuiltinFont::HelveticaBold)?;
+
+  // sizes
+  let fs_title  = 13.0;
+  let fs_meta   = 9.5;
+  let fs_head   = 10.2;
+  let fs_cell   = 9.7;
+  let header_h  = 9.0;
+  let row_h     = 7.2;
+  let pad       = 1.8;
+
+  // widths (description expands)
+  fn base_width_for(col: &str) -> f64 {
+    match col {
+      "date" => 24.0, "account" => 36.0, "category" => 36.0, "amount" => 28.0, _ => 24.0
+    }
+  }
+  let mut sum_fixed = 0.0;
+  let mut has_desc = false;
+  for c in &cols {
+    if c == "description" { has_desc = true; continue; }
+    sum_fixed += base_width_for(c);
+  }
+  let mut col_w_mm: Vec<f64> = Vec::with_capacity(cols.len());
+  for c in &cols {
+    if c == "description" && has_desc {
+      let w = (content_w - sum_fixed).max(24.0);
+      col_w_mm.push(w);
+    } else {
+      col_w_mm.push(base_width_for(c));
+    }
+  }
+
+  // page
+  let mut page = page_id;
+  let mut layer = layer_id;
+  let mut layer_ref = doc.get_page(page).get_layer(layer);
+  let mut y = page_h.0 - m_t.0;
+
+  // meta
+  draw_text(&layer_ref, &font_bold, "Reimbursable report (open window)", m_l.0, y, fs_title, black());
+  y -= 4.0 + row_h;
+  draw_text(&layer_ref, &font_normal, &format!("Account: {}", account_label), m_l.0, y, fs_meta, black()); y -= row_h;
+
+  let period_label = match (&period_from, &period_to) {
+    (Some(df), Some(dt)) => format!("Period: {} – {}", iso_to_de(df), iso_to_de(dt)),
+    (Some(df), None)     => format!("Period: from {}", iso_to_de(df)),
+    (None, Some(dt))     => format!("Period: until {}", iso_to_de(dt)),
+    _                    => "Period: —".to_string(),
+  };
+  draw_text(&layer_ref, &font_normal, &period_label, m_l.0, y, fs_meta, black()); y -= row_h;
+
+  let generated_label = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
+  draw_text(&layer_ref, &font_normal, &format!("Generated: {}", generated_label), m_l.0, y, fs_meta, black()); y -= row_h + 2.0;
+
+  // header
+  draw_table_header(&layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad);
+  y -= header_h;
+
+  // rows
+  let mut total_outstanding: f64 = 0.0;
+
+  for (row_idx, row) in rows.iter().enumerate() {
+    if y < m_b.0 + (row_h * 3.0) {
+      let (np, nl) = doc.add_page(page_w, page_h, "Layer");
+      page = np;
+      layer = nl;
+      layer_ref = doc.get_page(page).get_layer(layer);
+      y = page_h.0 - m_t.0;
+      draw_table_header(&layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad);
+      y -= header_h;
+    }
+
+    if row_idx % 2 == 1 { draw_rect(&layer_ref, m_l.0, y, content_w, row_h, Some(row_alt()), None); }
+
+    // column borders
+    {
+      let mut gx = m_l.0;
+      draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
+      for w in &col_w_mm {
+        gx += *w;
+        draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
+      }
+    }
+
+    // values
+    let mut x = m_l.0;
+    for (i, w) in col_w_mm.iter().enumerate() {
+      let key = cols[i].as_str();
+      if key == "amount" {
+        let s_full = format!("{} €", format_amount_eu(row.adj_amount));
+        let s = clip_by_max_chars(&s_full, *w, fs_cell, pad);
+        let color = if row.adj_amount < 0.0 { expense() } else { income() };
+        draw_text(&layer_ref, &font_bold, &s, x + pad, y, fs_cell, color);
+      } else {
+        let content = match key {
+          "date"        => iso_to_de(&row.it.date),
+          "account"     => row.it.account_name.clone(),
+          "category"    => row.it.category.clone().unwrap_or_default(),
+          "description" => row.desc.clone(),
+          other         => other.to_string(),
+        };
+        let s = clip_for_width_with_font(&font_normal, &content, *w, fs_cell, pad);
+        draw_text(&layer_ref, &font_normal, &s, x + pad, y, fs_cell, black());
+      }
+      x += *w;
+    }
+
+    draw_rect(&layer_ref, m_l.0, y, content_w, 0.1, None, Some((grid(), 0.18)));
+
+    total_outstanding += row.adj_amount;
+    y -= row_h;
+  }
+
+  // --- Single TOTAL line ---
+  if y < m_b.0 + (row_h * 2.0) {
+    let (np, nl) = doc.add_page(page_w, page_h, "Layer");
+    page = np;
+    layer = nl;
+    layer_ref = doc.get_page(page).get_layer(layer);
+    y = page_h.0 - m_t.0;
+  }
+
+  y -= 2.0;
+  draw_rect(&layer_ref, m_l.0, y, content_w, row_h * 1.2, Some(total_bg()), Some((grid(), 0.3)));
+
+  let label = "Total";
+  let value = format!("{} €", format_amount_eu(total_outstanding));
+  draw_text(&layer_ref, &font_bold, label, m_l.0 + pad, y, fs_head, black());
+  let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
+  let col = if total_outstanding < 0.0 { expense() } else { income() };
+  draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, col);
+
+  let file = File::create(&path).map_err(|e| e.to_string())?;
+  doc.save(&mut BufWriter::new(file)).map_err(|e| e.to_string())?;
+  Ok(path.to_string_lossy().to_string())
+}
+
+
 /* ---------- App setup ---------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   let base = app.path_resolver().app_data_dir().ok_or_else(|| "Failed to resolve app data dir".to_string())?;
@@ -1252,7 +1752,8 @@ pub fn run() {
       // categories
       list_categories,
       // search/export
-      search_transactions, export_transactions_xlsx, export_transactions_pdf
+      search_transactions, export_transactions_xlsx, export_transactions_pdf, export_reimbursable_report_xlsx,
+      export_reimbursable_report_pdf,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -1,4 +1,3 @@
-// src/pages/Transactions.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 
@@ -8,11 +7,10 @@ import {
   deleteTransaction,
   updateTransaction,
   exportTransactionsXlsx,
-  // make sure this exists in src/lib/api.ts:
-  // export async function exportTransactionsPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
-  //   return invoke<string>('export_transactions_pdf', { filters, columns });
-  // }
   exportTransactionsPdf,
+  // NEW:
+  exportReimbursableReportXlsx,
+  exportReimbursableReportPdf,
 } from '../lib/api';
 
 import type {
@@ -34,7 +32,7 @@ import TransactionTableTx from '../components/TransactionTableTx';
 
 type OutletCtx = { hidden: boolean };
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 18;
 
 /* ---------- helpers ---------- */
 function ymd(date: Date) {
@@ -152,6 +150,14 @@ export default function Transactions() {
     [data.total, limit]
   );
 
+  /* ----- current selected account (for reimbursable export button state) ----- */
+  const selectedAccount = useMemo(
+    () => accounts.find(a => a.id === (account_id ?? -1)) ?? null,
+    [accounts, account_id]
+  );
+  const isReimbursableSelected = selectedAccount?.type === 'reimbursable';
+  const selectedBalance = selectedAccount?.balance ?? 0;
+
   /* ----- main fetch ----- */
   useEffect(() => {
     const mySeq = ++reqSeqRef.current;
@@ -257,6 +263,40 @@ export default function Transactions() {
       setLoading(false);
     }
   };
+
+  // --- NEW: Export reimbursable report (only when filtered to reimbursable account) ---
+  const handleExportReimbursable = async () => {
+    if (!account_id || !isReimbursableSelected) {
+      alert('Filter to a reimbursable account first.');
+      return;
+    }
+    if (exportCols.length === 0) {
+      alert('Please choose at least one column to export.');
+      return;
+    }
+    setLoading(true);
+    try {
+      // We pass current filters; the backend will enforce reimbursable mode and ignore date/query for the slice.
+      const common = {
+        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
+        query: query.trim() || undefined,
+        tx_type: type,
+      };
+      const path =
+        exportFmt === 'pdf'
+          ? await exportReimbursableReportPdf(common, exportCols)
+          : await exportReimbursableReportXlsx(common, exportCols);
+
+      setExportOkPath(path);
+    } catch (e) {
+      console.error(e);
+      alert('Reimbursable export failed. See console for details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reimbursableDisabled = !account_id || !isReimbursableSelected;
 
   return (
     <div className="px-3 sm:px-4 md:px-6 pt-4 grid gap-6 2xl:grid-cols-[minmax(1280px,1fr)_minmax(60px,480px)]">
@@ -400,7 +440,7 @@ export default function Transactions() {
             </div>
             <div className="flex items-center gap-2 font-medium">
               <span className="text-neutral-500">Saldo</span>
-              <Amount value={sumSaldo} hidden={hidden} />
+              <Amount value={(data.sum_income ?? 0) + (data.sum_expense ?? 0)} hidden={hidden} />
             </div>
           </div>
         </div>
@@ -484,6 +524,20 @@ export default function Transactions() {
 
         <button className="btn btn-primary w-full mt-4" onClick={handleExport} disabled={loading}>
           Export
+        </button>
+
+        {/* NEW: reimbursable button */}
+        <button
+          className="btn w-full mt-2"
+          onClick={handleExportReimbursable}
+          disabled={loading || reimbursableDisabled}
+          title={
+            reimbursableDisabled
+              ? 'Filter to a reimbursable account to enable'
+              : undefined
+          }
+        >
+          Export reimbursable report
         </button>
 
         <div className="text-xs text-neutral-500 mt-2">

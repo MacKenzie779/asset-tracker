@@ -8,6 +8,11 @@ import {
   deleteTransaction,
   updateTransaction,
   exportTransactionsXlsx,
+  // make sure this exists in src/lib/api.ts:
+  // export async function exportTransactionsPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
+  //   return invoke<string>('export_transactions_pdf', { filters, columns });
+  // }
+  exportTransactionsPdf,
 } from '../lib/api';
 
 import type {
@@ -91,35 +96,21 @@ function useSearch() {
 /* ---------- page ---------- */
 export default function Transactions() {
   const ALL_EXPORT_COLS = [
-    { key: 'date', label: 'Date' },
-    { key: 'account', label: 'Account' },
-    { key: 'category', label: 'Category' },
+    { key: 'date',        label: 'Date' },
+    { key: 'account',     label: 'Account' },
+    { key: 'category',    label: 'Category' },
     { key: 'description', label: 'Notes' },
-    { key: 'amount', label: 'Value' },
+    { key: 'amount',      label: 'Value' },
   ] as const;
+
   const [exportCols, setExportCols] = useState<string[]>(
     ALL_EXPORT_COLS.map(c => c.key) // default: all
   );
   const toggleExportCol = (key: string) =>
     setExportCols(cols => cols.includes(key) ? cols.filter(k => k !== key) : [...cols, key]);
 
-  const handleExport = async () => {
-    if (exportCols.length === 0) {
-      alert('Please choose at least one column to export.');
-      return;
-    }
-    const path = await exportTransactionsXlsx(
-      {
-        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
-        query: query.trim() || undefined,
-        tx_type: type,
-      },
-      exportCols            // <— pass user selection
-    );
-    alert(`Exported to: ${path}`);
-  };
-
-
+  const [exportFmt, setExportFmt] = useState<'xlsx' | 'pdf'>('xlsx');
+  const [exportOkPath, setExportOkPath] = useState<string | null>(null);
 
   const { hidden } = useOutletContext<OutletCtx>();
   const accounts = useAccounts();
@@ -238,6 +229,33 @@ export default function Transactions() {
         prev.sort_by === by ? (prev.sort_dir === 'asc' ? 'desc' : 'asc') : 'asc';
       return { ...prev, sort_by: by, sort_dir: nextDir, offset: 0 };
     });
+  };
+
+  // --- Export (XLSX / PDF) + success modal ---
+  const handleExport = async () => {
+    if (exportCols.length === 0) {
+      alert('Please choose at least one column to export.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const common = {
+        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
+        query: query.trim() || undefined,
+        tx_type: type,
+      };
+      const path =
+        exportFmt === 'pdf'
+          ? await exportTransactionsPdf(common, exportCols)
+          : await exportTransactionsXlsx(common, exportCols);
+
+      setExportOkPath(path); // open success modal
+    } catch (e) {
+      console.error(e);
+      alert('Export failed. See console for details.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -429,37 +447,42 @@ export default function Transactions() {
         <div className="space-y-2 text-sm">
           <div className="font-medium">Export as</div>
           <label className="flex items-center gap-2">
-            <input type="radio" name="exportfmt" defaultChecked readOnly />
+            <input
+              type="radio"
+              name="exportfmt"
+              checked={exportFmt === 'xlsx'}
+              onChange={() => setExportFmt('xlsx')}
+            />
             <span>Excel (.xlsx)</span>
           </label>
-          <label className="flex items-center gap-2 opacity-50">
-            <input type="radio" name="exportfmt" disabled readOnly />
-            <span>PDF (coming soon)</span>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="exportfmt"
+              checked={exportFmt === 'pdf'}
+              onChange={() => setExportFmt('pdf')}
+            />
+            <span>PDF (.pdf)</span>
           </label>
         </div>
 
-        {/* === NEW: choose columns === */}
         <div className="mt-3 space-y-2 text-sm">
           <div className="font-medium">Choose columns</div>
-          <div className="grid grid-cols-2 gap-2">
-            {ALL_EXPORT_COLS.map(c => (
-              <label key={c.key} className="flex items-center gap-2">
+          <div className="grid gap-1">
+            {ALL_EXPORT_COLS.map(col => (
+              <label key={col.key} className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={exportCols.includes(c.key)}
-                  onChange={() => toggleExportCol(c.key)}
+                  checked={exportCols.includes(col.key)}
+                  onChange={() => toggleExportCol(col.key)}
                 />
-                <span>{c.label}</span>
+                <span>{col.label}</span>
               </label>
             ))}
           </div>
         </div>
 
-        <button
-          className="btn btn-primary w-full mt-4"
-          onClick={handleExport}
-          disabled={loading || exportCols.length === 0}
-        >
+        <button className="btn btn-primary w-full mt-4" onClick={handleExport} disabled={loading}>
           Export
         </button>
 
@@ -468,6 +491,7 @@ export default function Transactions() {
         </div>
       </div>
 
+      {/* Delete confirmation */}
       <ConfirmDialog
         open={confirmTxId !== null}
         title="Delete transaction?"
@@ -476,7 +500,22 @@ export default function Transactions() {
         cancelText="Cancel"
         danger
         onCancel={() => setConfirmTxId(null)}
-        onConfirm={confirmDeleteTx}
+        onConfirm={async () => {
+          const id = confirmTxId!;
+          setConfirmTxId(null);
+          await deleteTransaction(id);
+          await refresh();
+        }}
+      />
+
+      {/* Export success modal (single OK button) */}
+      <ConfirmDialog
+        open={exportOkPath !== null}
+        title="Export successful"
+        description={`Saved to:\n${exportOkPath ?? ''}`}
+        confirmText="OK"
+        onConfirm={() => setExportOkPath(null)}
+        onCancel={() => setExportOkPath(null)}
       />
     </div>
   );

@@ -17,8 +17,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 thiserror = "1"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 rust_xlsxwriter = "0.69"
+printpdf = "0.5"
 
 [profile.release]
 lto = true

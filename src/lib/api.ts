@@ -1,22 +1,11 @@
 // src/lib/api.ts
 import { invoke } from '@tauri-apps/api/tauri';
 import type {
-  Asset, NewAsset, UpdateAsset,
   Account, NewAccount, UpdateAccount,
   Transaction, NewTransaction, UpdateTransaction,
   TransactionSearch, TransactionSearchResult,
 } from '../types';
 
-/* assets */
-export async function listAssets(): Promise<Asset[]> {
-  return invoke<Asset[]>('list_assets');
-}
-export async function addAsset(input: NewAsset): Promise<number> {
-  return invoke<number>('add_asset', { input });
-}
-export async function updateAsset(input: UpdateAsset): Promise<boolean> {
-  return invoke<boolean>('update_asset', { input });
-}
 export async function deleteAsset(id: number): Promise<boolean> {
   return invoke<boolean>('delete_asset', { id });
 }
@@ -56,4 +45,8 @@ export async function searchTransactions(filters: TransactionSearch): Promise<Tr
 }
 export async function exportTransactionsXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
   return invoke<string>('export_transactions_xlsx', { filters, columns });
+}
+/* NEW: PDF export */
+export async function exportTransactionsPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
+  return invoke<string>('export_transactions_pdf', { filters, columns });
 }

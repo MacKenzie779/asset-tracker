@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-
+use printpdf::{Mm, PdfLayerReference, Line, Point, Color, Rgb, IndirectFontRef};
 use serde::{Deserialize, Serialize};
 use sqlx::Arguments;
 use sqlx::{
@@ -618,7 +618,7 @@ async fn export_transactions_xlsx(
 
   /* ---------- Workbook + formats ---------- */
   let mut wb = Workbook::new();
-  let mut sheet = wb.add_worksheet();
+  let sheet = wb.add_worksheet();
 
   let title_fmt  = Format::new().set_bold().set_font_size(14);
   let label_fmt  = Format::new().set_bold();
@@ -766,9 +766,457 @@ async fn export_transactions_xlsx(
   Ok(path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+async fn export_transactions_pdf(
+  state: tauri::State<'_, AppState>,
+  filters: TxSearch,
+  columns: Option<Vec<String>>,
+) -> Result<String, String> {
+  use printpdf::{PdfDocument, Mm, BuiltinFont, IndirectFontRef};
+  use std::io::{BufWriter, Cursor};
+  use std::fs::File;
+
+  /* ---------- fetch rows (respect current filters + sort) ---------- */
+  let mut where_sql = String::new();
+  let mut args: Vec<BindArg> = Vec::new();
+  build_where(&filters, &mut where_sql, &mut args);
+  let order_sql = build_order(&filters);
+
+  let mut sql = String::from(
+    "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
+            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
+     FROM transactions t \
+     JOIN accounts a ON a.id = t.account_id \
+     LEFT JOIN categories c ON c.id = t.category_id"
+  );
+  sql.push_str(&where_sql);
+  sql.push_str(&order_sql);
+
+  let mut q = sqlx::query_as::<_, TransactionOut>(&sql);
+  for a in &args {
+    match a {
+      BindArg::I(v) => { q = q.bind(*v); }
+      BindArg::S(s) => { q = q.bind(s); }
+    }
+  }
+  let items = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
+
+  /* ---------- metadata strings ---------- */
+  let account_label = if let Some(acc_id) = filters.account_id {
+    let name: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = ?")
+      .bind(acc_id)
+      .fetch_optional(&state.pool).await
+      .map_err(|e| e.to_string())?;
+    name.map(|(n,)| n).unwrap_or_else(|| format!("Account #{}", acc_id))
+  } else {
+    "All accounts".to_string()
+  };
+
+  let timespan_label = match (&filters.date_from, &filters.date_to) {
+    (Some(df), Some(dt)) => format!("{} – {}", iso_to_de(df), iso_to_de(dt)),
+    (Some(df), None)     => format!("from {}", iso_to_de(df)),
+    (None, Some(dt))     => format!("until {}", iso_to_de(dt)),
+    _                    => "All time".to_string(),
+  };
+
+  let generated_label = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
+
+  /* ---------- output path ---------- */
+  let download_dir = tauri::api::path::download_dir().ok_or("No downloads directory")?;
+  let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+  let path = std::path::PathBuf::from(download_dir).join(format!("transactions_{}.pdf", ts));
+
+  /* ---------- PDF canvas ---------- */
+  let page_w = Mm(210.0);
+  let page_h = Mm(297.0);
+  let m_l = Mm(14.0);
+  let m_r = Mm(14.0);
+  let m_t = Mm(16.0);
+  let m_b = Mm(18.0);
+  let content_w = page_w.0 - m_l.0 - m_r.0;
+
+  let (doc, page_id, layer_id) = PdfDocument::new("Transactions Export", page_w, page_h, "Layer 1");
+
+  /* ---------- fonts (embed DejaVu if present) ---------- */
+  fn load_font(doc: &printpdf::PdfDocumentReference, file: &str, fallback: BuiltinFont)
+    -> Result<IndirectFontRef, String>
+  {
+    let path = format!("{}/assets/{}", env!("CARGO_MANIFEST_DIR"), file);
+    match std::fs::read(&path) {
+      Ok(bytes) => doc.add_external_font(Cursor::new(bytes)).map_err(|e| e.to_string()),
+      Err(_)    => doc.add_builtin_font(fallback).map_err(|e| e.to_string()),
+    }
+  }
+  let font_normal = load_font(&doc, "DejaVuSans.ttf", BuiltinFont::Helvetica)?;
+  let font_bold   = load_font(&doc, "DejaVuSans-Bold.ttf", BuiltinFont::HelveticaBold)?;
+
+  /* ---------- sizes ---------- */
+  let fs_title  = 13.0;
+  let fs_meta   = 9.5;
+  let fs_head   = 10.2;
+  let fs_cell   = 9.7;
+  let header_h  = 9.0;
+  let row_h     = 7.2;
+  let pad       = 1.8; // cell inner padding (mm)
+
+  /* ---------- columns ---------- */
+  let cols: Vec<String> = columns.unwrap_or_else(|| {
+    vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()]
+  });
+
+  fn base_width_for(col: &str) -> f64 {
+    match col {
+      "date"        => 24.0,
+      "account"     => 36.0,
+      "category"    => 36.0,
+      "amount"      => 28.0,
+      _             => 24.0,
+    }
+  }
+  // compute widths (description expands)
+  let mut sum_fixed = 0.0;
+  let mut has_desc = false;
+  for c in &cols {
+    if c == "description" { has_desc = true; continue; }
+    sum_fixed += base_width_for(c);
+  }
+  let mut col_w_mm: Vec<f64> = Vec::with_capacity(cols.len());
+  for c in &cols {
+    if c == "description" && has_desc {
+      let w = (content_w - sum_fixed).max(24.0);
+      col_w_mm.push(w);
+    } else {
+      col_w_mm.push(base_width_for(c));
+    }
+  }
+
+  /* ---------- drawing state ---------- */
+  let mut page = page_id;
+  let mut layer = layer_id;
+  let mut layer_ref = doc.get_page(page).get_layer(layer);
+  let mut y = page_h.0 - m_t.0;
+
+  /* ---------- top meta block ---------- */
+  draw_text(&layer_ref, &font_bold, "Transactions (filtered export)", m_l.0, y, fs_title, black());
+  y -= 4.0 + row_h;
+  draw_text(&layer_ref, &font_normal, &format!("Account: {}",   account_label),  m_l.0, y, fs_meta, black()); y -= row_h;
+  draw_text(&layer_ref, &font_normal, &format!("Time span: {}", timespan_label), m_l.0, y, fs_meta, black()); y -= row_h;
+  draw_text(&layer_ref, &font_normal, &format!("Generated: {}", generated_label),m_l.0, y, fs_meta, black()); y -= row_h + 2.0;
+
+  /* ---------- header band ---------- */
+  draw_table_header(&layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad);
+  y -= header_h;
+
+  /* ---------- rows ---------- */
+  let mut sum_income: f64 = 0.0;
+  let mut sum_expense: f64 = 0.0;
+
+  for (row_idx, it) in items.iter().enumerate() {
+    // page break (keep some space for summary)
+    if y < m_b.0 + (row_h * 4.0) {
+      let (np, nl) = doc.add_page(page_w, page_h, "Layer");
+      page = np;
+      layer = nl;
+      layer_ref = doc.get_page(page).get_layer(layer);
+      y = page_h.0 - m_t.0;
+      draw_table_header(&layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad);
+      y -= header_h;
+    }
+
+    // zebra bg
+    if row_idx % 2 == 1 { draw_rect(&layer_ref, m_l.0, y, content_w, row_h, Some(row_alt()), None); }
+
+    // vertical grid (inner + outer)
+    {
+      let mut gx = m_l.0;
+      draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18))); // left border
+      for (_, w) in col_w_mm.iter().enumerate() {
+        gx += *w;
+        draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
+      }
+    }
+
+    // values in order of cols
+    let mut x = m_l.0;
+    for (i, w) in col_w_mm.iter().enumerate() {
+      let key = cols[i].as_str();
+      if key == "amount" {
+        // SAFEST: left-align inside the cell to guarantee it's inside the box
+        let s_full = format!("{} €", format_amount_eu(it.amount));
+        let s = clip_by_max_chars(&s_full, *w, fs_cell, pad);
+        let color = if it.amount < 0.0 { expense() } else { income() };
+        draw_text(&layer_ref, &font_bold, &s, x + pad, y, fs_cell, color);
+      } else {
+        let content = match key {
+          "date"        => iso_to_de(&it.date),
+          "account"     => it.account_name.clone(),
+          "category"    => it.category.clone().unwrap_or_default(),
+          "description" => it.description.clone().unwrap_or_default(),
+          other         => other.to_string(),
+        };
+        let s = clip_for_width_with_font(&font_normal, &content, *w, fs_cell, pad);
+        draw_text(&layer_ref, &font_normal, &s, x + pad, y, fs_cell, black());
+      }
+      x += *w;
+    }
+
+    // horizontal hairline
+    draw_rect(&layer_ref, m_l.0, y, content_w, 0.1, None, Some((grid(), 0.18)));
+
+    if it.amount > 0.0 { sum_income += it.amount; }
+    if it.amount < 0.0 { sum_expense += it.amount; }
+
+    y -= row_h;
+  }
+
+  /* ---------- summary ---------- */
+  let saldo = sum_income + sum_expense;
+  if y < m_b.0 + (row_h * 4.0) {
+    let (np, nl) = doc.add_page(page_w, page_h, "Layer");
+    page = np;
+    layer = nl;
+    layer_ref = doc.get_page(page).get_layer(layer);
+    y = page_h.0 - m_t.0;
+  }
+
+  y -= 2.0;
+  draw_rect(&layer_ref, m_l.0, y, content_w, row_h * 3.0, Some(total_bg()), Some((grid(), 0.3)));
+
+  // income
+  {
+    let label = "Total income";
+    let value = format!("{} €", format_amount_eu(sum_income));
+    draw_text(&layer_ref, &font_bold, label, m_l.0 + pad, y, fs_head, black());
+    let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
+    draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, income());
+    y -= row_h;
+  }
+  // expenses
+  {
+    let label = "Total expenses";
+    let value = format!("{} €", format_amount_eu(sum_expense));
+    draw_text(&layer_ref, &font_bold, label, m_l.0 + pad, y, fs_head, black());
+    let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
+    draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, expense());
+    y -= row_h;
+  }
+  // saldo
+  {
+    let label = "Saldo";
+    let value = format!("{} €", format_amount_eu(saldo));
+    draw_text(&layer_ref, &font_bold, label, m_l.0 + pad, y, fs_head, black());
+    let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
+    let s_col = if saldo < 0.0 { expense() } else { income() };
+    draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, s_col);
+  }
+
+  // save
+  let file = File::create(&path).map_err(|e| e.to_string())?;
+  doc.save(&mut BufWriter::new(file)).map_err(|e| e.to_string())?;
+  Ok(path.to_string_lossy().to_string())
+}
+
+/* ======================================================================
+   Helpers (colors, drawing, layout, formatting, clipping, alignment)
+   ====================================================================== */
+
+fn black()     -> Color { Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)) }
+fn grid()      -> Color { Color::Rgb(Rgb::new(0.84, 0.85, 0.86, None)) }   // #D6D6DB
+fn header_bg() -> Color { Color::Rgb(Rgb::new(0.95, 0.96, 0.98, None)) }
+fn row_alt()   -> Color { Color::Rgb(Rgb::new(0.985, 0.985, 0.985, None)) }
+fn income()    -> Color { Color::Rgb(Rgb::new(0.09, 0.64, 0.29, None)) }   // green-600
+fn expense()   -> Color { Color::Rgb(Rgb::new(0.86, 0.15, 0.15, None)) }   // red-600
+fn total_bg()  -> Color { Color::Rgb(Rgb::new(0.94, 0.97, 0.94, None)) }   // greenish tint
+
+fn draw_rect(
+  layer: &PdfLayerReference,
+  x: f64, y_top: f64, w: f64, h: f64,
+  fill: Option<Color>, stroke: Option<(Color, f64)>
+) {
+  let pts = vec![
+    (Point::new(Mm(x),     Mm(y_top)),     false),
+    (Point::new(Mm(x + w), Mm(y_top)),     false),
+    (Point::new(Mm(x + w), Mm(y_top - h)), false),
+    (Point::new(Mm(x),     Mm(y_top - h)), false),
+  ];
+  let shape = Line {
+    points: pts,
+    is_closed: true,
+    has_fill: fill.is_some(),
+    has_stroke: stroke.is_some(),
+    is_clipping_path: false,
+  };
+  if let Some(c) = fill { layer.set_fill_color(c); }
+  if let Some((c, th)) = stroke {
+    layer.set_outline_color(c);
+    layer.set_outline_thickness(th);
+  }
+  layer.add_shape(shape);
+}
+
+fn draw_text(
+  layer: &PdfLayerReference,
+  font: &IndirectFontRef,
+  s: &str,
+  x: f64, y_top: f64,
+  fs: f64,
+  color: Color,
+) {
+  layer.set_fill_color(color);
+  // baseline tweak so text looks centered in the row height we use
+  layer.use_text(s, fs, Mm(x), Mm(y_top - 4.0), font);
+}
+
+fn draw_table_header(
+  layer: &PdfLayerReference,
+  font_bold: &IndirectFontRef,
+  x0: f64, y_top: f64, content_w: f64, header_h: f64,
+  cols: &[String], col_w_mm: &[f64], fs_head: f64, pad: f64
+) {
+  draw_rect(layer, x0, y_top, content_w, header_h, Some(header_bg()), Some((grid(), 0.3)));
+  draw_rect(layer, x0,            y_top, 0.1,       header_h, None, Some((grid(), 0.3)));
+  draw_rect(layer, x0 + content_w,y_top, 0.1,       header_h, None, Some((grid(), 0.3)));
+
+  let mut x = x0;
+  for (i, w) in col_w_mm.iter().enumerate() {
+    if i > 0 { draw_rect(layer, x, y_top, 0.1, header_h, None, Some((grid(), 0.3))); }
+    let label = match cols[i].as_str() {
+      "date" => "Date", "account" => "Account", "category" => "Category",
+      "description" => "Notes", "amount" => "Value", other => other
+    };
+    // To guarantee "inside cell", header labels are left-aligned too
+    draw_text(layer, font_bold, label, x + pad, y_top, fs_head, black());
+    x += *w;
+  }
+  draw_rect(layer, x0, y_top, content_w, 0.1, None, Some((grid(), 0.3)));
+}
+
+// "YYYY-MM-DD" -> "DD.MM.YYYY"
+fn iso_to_de(iso: &str) -> String {
+  if iso.len() >= 10 {
+    let y = &iso[0..4]; let m = &iso[5..7]; let d = &iso[8..10];
+    format!("{}.{}.{}", d, m, y)
+  } else { iso.to_string() }
+}
+
+// 1.234,56 with sign (no currency symbol)
+fn format_amount_eu(v: f64) -> String {
+  let sign = if v < 0.0 { "-" } else { "" };
+  let n = (v.abs() * 100.0).round() / 100.0;
+  let s = format!("{:.2}", n);
+  let parts = s.split('.').collect::<Vec<_>>();
+  let mut int = parts[0].to_string();
+  let frac = parts.get(1).copied().unwrap_or("00");
+  let mut out = String::new();
+  while int.len() > 3 {
+    let rest = int.split_off(int.len() - 3);
+    out = format!(".{}{}", rest, out);
+  }
+  out = format!("{}{}", int, out);
+  format!("{}{},{}", sign, out, frac)
+}
+
+/* ---- conservative clipping & right-edge placement for summary ---- */
+
+// VERY conservative char-based clip so content never spills out of a column.
+// Uses a "worst case" per-char width to decide how many characters can fit.
+fn clip_by_max_chars(s: &str, col_mm: f64, fs_pt: f64, padding_mm: f64) -> String {
+  // worst-case per-char width (mm) at 9.7 pt, scaled with font size
+  let worst_per_char = 0.90 * (fs_pt / 9.7);
+  let avail = (col_mm - 2.0 * padding_mm).max(3.0);
+  let max_chars = (avail / worst_per_char).floor() as usize;
+  if s.chars().count() <= max_chars { return s.to_string(); }
+  let mut out = String::new();
+  let mut count = 0usize;
+  for ch in s.chars() {
+    if count + 1 >= max_chars { break; }
+    out.push(ch);
+    count += 1;
+  }
+  out.push('…');
+  out
+}
+
+// Cheap right-align helper for summary values (page-wide line).
+// Compute start-X so text ends at the cell's right padding,
+// using a conservative worst-case per-char width based on font size.
+// This guarantees the value stays inside the colored summary box.
+fn text_right_x(
+    col_left_mm: f64,
+    col_w_mm: f64,
+    _font: &IndirectFontRef, // kept for API compatibility
+    s: &str,
+    fs_pt: f64,
+    padding_mm: f64,
+) -> f64 {
+    // worst-case char width at 9.7pt, scaled by fs
+    // (intentionally large so we never overflow to the right)
+    let per_char_mm = 0.90 * (fs_pt / 4.5);
+    let mut w = (s.chars().count() as f64) * per_char_mm;
+
+    // never assume wider than the available inner width
+    let max_inner = (col_w_mm - 2.0 * padding_mm).max(0.0);
+    if w > max_inner { w = max_inner; }
+
+    let tx = col_left_mm + col_w_mm - padding_mm - w;
+    // and never go left of the left padding
+    tx.max(col_left_mm + padding_mm)
+}
 
 
+// --- width estimator tuned for amounts (digits, separators, minus, €) ---
+// We can't read real glyph metrics from printpdf, so we approximate the width
+// in millimeters based on the font size and character class.
+fn est_char_mm(ch: char, fs_pt: f64) -> f64 {
+    // base mm per "average digit" at fs=9.7 pt (empirically tuned)
+    let base = 0.46 * (fs_pt / 9.7);
+    match ch {
+        // narrower digits
+        '1' => base * 0.78,
+        // decimal/grouping separators and space
+        '.' | ',' => base * 0.62,
+        ' '       => base * 0.55,
+        // minus sign
+        '-'       => base * 0.70,
+        // euro tends to be a bit wider
+        '€'       => base * 1.18,
+        // typical wide letters fall back here; we mostly print numbers anyway
+        _         => base * 1.00,
+    }
+}
 
+// Approximate text width in mm for a given string at font size fs_pt
+// Signature kept the same to avoid changing the call sites; `font` is unused.
+fn text_width_mm(_font: &IndirectFontRef, s: &str, fs_pt: f64) -> f64 {
+    s.chars().map(|ch| est_char_mm(ch, fs_pt)).sum()
+}
+
+// Clip a string so it fits in a column using the estimator (keeps signature).
+fn clip_for_width_with_font(
+    font: &IndirectFontRef, // unused (kept for API compatibility)
+    s: &str,
+    col_mm: f64,
+    fs_pt: f64,
+    padding_mm: f64,
+) -> String {
+    let avail = (col_mm - 2.0 * padding_mm).max(3.0);
+    if text_width_mm(font, s, fs_pt) <= avail {
+        return s.to_string();
+    }
+    let ell = '…';
+    let ell_w = est_char_mm(ell, fs_pt);
+
+    let mut out = String::new();
+    let mut acc = 0.0;
+    for ch in s.chars() {
+        let w = est_char_mm(ch, fs_pt);
+        if acc + w + ell_w > avail { break; }
+        out.push(ch);
+        acc += w;
+    }
+    out.push(ell);
+    out
+}
 
 /* ---------- App setup ---------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -804,7 +1252,7 @@ pub fn run() {
       // categories
       list_categories,
       // search/export
-      search_transactions, export_transactions_xlsx,
+      search_transactions, export_transactions_xlsx, export_transactions_pdf
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

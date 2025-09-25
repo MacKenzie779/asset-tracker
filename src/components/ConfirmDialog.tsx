@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export default function ConfirmDialog({
   open,
@@ -19,7 +19,11 @@ export default function ConfirmDialog({
   onCancel: () => void;
   danger?: boolean;
 }) {
+
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+
   useEffect(() => {
+    
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
@@ -27,6 +31,28 @@ export default function ConfirmDialog({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onCancel]);
+
+    // Global key handlers while open:
+  // Enter → confirm, Escape → cancel
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        onConfirm?.();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel?.();
+      }
+    };
+
+    // capture=true so it wins over table/input handlers
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [open, onConfirm, onCancel]);
 
   if (!open) return null;
 

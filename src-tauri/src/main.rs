@@ -542,11 +542,16 @@ async fn export_transactions_xlsx(
   filters: TxSearch,
   columns: Option<Vec<String>>,
 ) -> Result<String, String> {
+  use chrono::{Datelike, Local, NaiveDate};
+  use rust_xlsxwriter::{Color, ExcelDateTime, Format, Workbook};
+
+  /* ---------- Build WHERE + ORDER like search_transactions ---------- */
   let mut where_sql = String::new();
   let mut args: Vec<BindArg> = Vec::new();
   build_where(&filters, &mut where_sql, &mut args);
   let order_sql = build_order(&filters);
 
+  /* ---------- Fetch all matching rows (no paging) ---------- */
   let mut sql = String::from(
     "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
             t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
@@ -566,38 +571,204 @@ async fn export_transactions_xlsx(
   }
   let items = q.fetch_all(&state.pool).await.map_err(|e| e.to_string())?;
 
-  let download_dir = tauri::api::path::download_dir().ok_or("No downloads directory")?;
-  let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-  let path = PathBuf::from(download_dir).join(format!("transactions_{}.xlsx", ts));
+  /* ---------- Report metadata (Account / Time span / Generated) ---------- */
+  // Account label
+  let account_label = if let Some(acc_id) = filters.account_id {
+    let name_opt = sqlx::query_scalar::<_, String>("SELECT name FROM accounts WHERE id = ?1")
+      .bind(acc_id)
+      .fetch_optional(&state.pool)
+      .await
+      .map_err(|e| e.to_string())?;
+    name_opt.unwrap_or_else(|| format!("Account #{acc_id}"))
+  } else {
+    "All accounts".to_string()
+  };
 
-  let cols = columns.unwrap_or_else(|| {
+  // Pretty dd.mm.yyyy for filter strings
+  let fmt_dmy = |s: &str| -> String {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+      .map(|d| format!("{:02}.{:02}.{:04}", d.day(), d.month(), d.year()))
+      .unwrap_or_else(|_| s.to_string())
+  };
+
+  // Time span label
+  let time_span_label = match (filters.date_from.as_deref(), filters.date_to.as_deref()) {
+    (Some(df), Some(dt)) => format!("{} – {}", fmt_dmy(df), fmt_dmy(dt)),
+    (Some(df), None)     => format!("since {}", fmt_dmy(df)),
+    (None, Some(dt))     => format!("until {}", fmt_dmy(dt)),
+    _                    => "All time".to_string(),
+  };
+
+  let generated_at = Local::now().format("%d.%m.%Y %H:%M").to_string();
+
+  /* ---------- Target file path ---------- */
+  let download_dir = tauri::api::path::download_dir().ok_or("No downloads directory")?;
+  let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+  let path = std::path::PathBuf::from(download_dir).join(format!("transactions_{}.xlsx", ts));
+
+  /* ---------- Column selection (stable order) ---------- */
+  let mut cols = columns.unwrap_or_else(|| {
     vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()]
   });
-
-  let mut wb = rust_xlsxwriter::Workbook::new();
-  let sheet = wb.add_worksheet();
-
-  for (i, name) in cols.iter().enumerate() {
-    sheet.write_string(0, i as u16, name).map_err(|e| e.to_string())?;
+  if cols.is_empty() {
+    cols = vec!["date".into(), "account".into(), "category".into(), "description".into(), "amount".into()];
   }
+  let order = ["date", "account", "category", "description", "amount"];
+  cols.sort_by_key(|k| order.iter().position(|x| x == &k.as_str()).unwrap_or(999));
+
+  /* ---------- Workbook + formats ---------- */
+  let mut wb = Workbook::new();
+  let mut sheet = wb.add_worksheet();
+
+  let title_fmt  = Format::new().set_bold().set_font_size(14);
+  let label_fmt  = Format::new().set_bold();
+  let header_fmt = Format::new().set_bold();
+
+  // Real Excel dates with fixed display format
+  let date_fmt   = Format::new().set_num_format("dd.mm.yyyy");
+
+  // Calm money colors + correct numeric pattern (Excel localizes separators in UI)
+  let money_fmt_pos  = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0x1B5E20));
+  let money_fmt_neg  = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0xB71C1C));
+  let money_fmt_zero = Format::new().set_num_format("#,##0.00 \"€\"").set_font_color(Color::RGB(0x424242));
+  let pick_money_fmt = |v: f64| if v > 0.0 { &money_fmt_pos } else if v < 0.0 { &money_fmt_neg } else { &money_fmt_zero };
+
+  /* ---------- Info block at top ---------- */
+  let mut current_row: u32 = 0;
+
+  sheet.write_string_with_format(current_row, 0, "Transactions export", &title_fmt)
+    .map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Account", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &account_label).map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Time span", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &time_span_label).map_err(|e| e.to_string())?;
+  current_row += 1;
+
+  sheet.write_string_with_format(current_row, 0, "Generated", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_string(current_row, 1, &generated_at).map_err(|e| e.to_string())?;
+  current_row += 2; // blank line
+
+  /* ---------- Table header ---------- */
+  let table_start_row = current_row;
+  for (i, key) in cols.iter().enumerate() {
+    let label = match key.as_str() {
+      "date"        => "Date",
+      "account"     => "Account",
+      "category"    => "Category",
+      "description" => "Notes",
+      "amount"      => "Value",
+      _             => key,
+    };
+    sheet.write_string_with_format(table_start_row, i as u16, label, &header_fmt)
+      .map_err(|e| e.to_string())?;
+  }
+
+  /* ---------- Autosize helpers ---------- */
+  // Estimate display width for formatted currency like "1,234,567.89 €"
+  fn display_len_amount(v: f64) -> usize {
+    let abs = v.abs();
+    let whole = abs.trunc() as i128;
+    let digits = whole.to_string().len();
+    let groups = if digits > 3 { (digits - 1) / 3 } else { 0 };
+    let sign = if v < 0.0 { 1 } else { 0 };
+    // digits + thousand separators + decimal ".00" + space + € + sign
+    digits + groups + 3 + 2 + sign
+  }
+
+  let header_labels: Vec<&str> = cols.iter().map(|k| match k.as_str() {
+    "date" => "Date", "account" => "Account", "category" => "Category",
+    "description" => "Notes", "amount" => "Value", _ => k
+  }).collect();
+  let mut col_widths: Vec<usize> = header_labels.iter().map(|s| s.chars().count()).collect();
+
+  /* ---------- Rows + totals ---------- */
+  let mut sum_income: f64 = 0.0;
+  let mut sum_expense: f64 = 0.0;
+
   for (r, item) in items.iter().enumerate() {
-    let row = (r + 1) as u32;
-    for (c, name) in cols.iter().enumerate() {
-      let res = match name.as_str() {
-        "date"        => sheet.write_string(row, c as u16, &item.date),
-        "account"     => sheet.write_string(row, c as u16, &item.account_name),
-        "category"    => sheet.write_string(row, c as u16, item.category.as_deref().unwrap_or("")),
-        "description" => sheet.write_string(row, c as u16, item.description.as_deref().unwrap_or("")),
-        "amount"      => sheet.write_number(row, c as u16, item.amount),
-        _             => sheet.write_string(row, c as u16, ""),
-      };
-      res.map_err(|e| e.to_string())?;
+    let row = table_start_row + 1 + r as u32;
+
+    for (c, key) in cols.iter().enumerate() {
+      match key.as_str() {
+        "date" => {
+          if let Ok(nd) = NaiveDate::parse_from_str(&item.date, "%Y-%m-%d") {
+            // rust_xlsxwriter 0.69 expects (u16, u8, u8)
+            let y: u16 = u16::try_from(nd.year()).map_err(|_| "Year out of range for ExcelDateTime")?;
+            let m: u8  = u8::try_from(nd.month()).map_err(|_| "Month out of range for ExcelDateTime")?;
+            let d: u8  = u8::try_from(nd.day()).map_err(|_| "Day out of range for ExcelDateTime")?;
+            let dt = ExcelDateTime::from_ymd(y, m, d).map_err(|e| e.to_string())?;
+            sheet.write_datetime_with_format(row, c as u16, &dt, &date_fmt).map_err(|e| e.to_string())?;
+          } else {
+            sheet.write_string(row, c as u16, &item.date).map_err(|e| e.to_string())?;
+          }
+          col_widths[c] = col_widths[c].max(10); // dd.mm.yyyy
+        }
+        "account" => {
+          sheet.write_string(row, c as u16, &item.account_name).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(item.account_name.chars().count());
+        }
+        "category" => {
+          let s = item.category.as_deref().unwrap_or("");
+          sheet.write_string(row, c as u16, s).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(s.chars().count());
+        }
+        "description" => {
+          let s = item.description.as_deref().unwrap_or("");
+          sheet.write_string(row, c as u16, s).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(s.chars().count());
+        }
+        "amount" => {
+          let fmt = pick_money_fmt(item.amount);
+          sheet.write_number_with_format(row, c as u16, item.amount, fmt).map_err(|e| e.to_string())?;
+          col_widths[c] = col_widths[c].max(display_len_amount(item.amount));
+        }
+        _ => {
+          sheet.write_string(row, c as u16, "").map_err(|e| e.to_string())?;
+        }
+      }
     }
+
+    if item.amount > 0.0 { sum_income += item.amount; }
+    if item.amount < 0.0 { sum_expense += item.amount; } // negative
   }
 
+  /* ---------- Summary ---------- */
+  let summary_row_start = table_start_row + 1 + items.len() as u32 + 1;
+  let value_col: u16 = (cols.len().saturating_sub(1)) as u16; // last visible column
+  let label_col: u16 = 0;
+
+  sheet.write_string_with_format(summary_row_start,     label_col, "Total income",   &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_number_with_format(summary_row_start,     value_col, sum_income, pick_money_fmt(sum_income)).map_err(|e| e.to_string())?;
+  col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(sum_income));
+
+  sheet.write_string_with_format(summary_row_start + 1, label_col, "Total expenses", &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_number_with_format(summary_row_start + 1, value_col, sum_expense, pick_money_fmt(sum_expense)).map_err(|e| e.to_string())?;
+  col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(sum_expense));
+
+  let saldo = sum_income + sum_expense;
+  sheet.write_string_with_format(summary_row_start + 2, label_col, "Saldo",          &label_fmt).map_err(|e| e.to_string())?;
+  sheet.write_number_with_format(summary_row_start + 2, value_col, saldo, pick_money_fmt(saldo)).map_err(|e| e.to_string())?;
+  col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(saldo));
+
+  /* ---------- Autosize columns (use Result to avoid warnings) ---------- */
+  for (c, w) in col_widths.iter().enumerate() {
+    // Add small padding and clamp to a reasonable max
+    let width = ((*w as f64) + 2.0).min(60.0);
+    sheet.set_column_width(c as u16, width).map_err(|e| e.to_string())?;
+  }
+
+  /* ---------- Save ---------- */
   wb.save(&path).map_err(|e| e.to_string())?;
   Ok(path.to_string_lossy().to_string())
 }
+
+
+
+
 
 /* ---------- App setup ---------- */
 fn ensure_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {

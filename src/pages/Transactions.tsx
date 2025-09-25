@@ -71,6 +71,7 @@ function useSearch() {
   const update = (patch: Partial<TransactionSearch>) =>
     setFilters(prev => {
       const next = { ...prev, ...patch };
+      // core filter/sort changes → jump to first page
       if (
         'date_from' in patch ||
         'date_to' in patch ||
@@ -89,6 +90,37 @@ function useSearch() {
 
 /* ---------- page ---------- */
 export default function Transactions() {
+  const ALL_EXPORT_COLS = [
+    { key: 'date', label: 'Date' },
+    { key: 'account', label: 'Account' },
+    { key: 'category', label: 'Category' },
+    { key: 'description', label: 'Notes' },
+    { key: 'amount', label: 'Value' },
+  ] as const;
+  const [exportCols, setExportCols] = useState<string[]>(
+    ALL_EXPORT_COLS.map(c => c.key) // default: all
+  );
+  const toggleExportCol = (key: string) =>
+    setExportCols(cols => cols.includes(key) ? cols.filter(k => k !== key) : [...cols, key]);
+
+  const handleExport = async () => {
+    if (exportCols.length === 0) {
+      alert('Please choose at least one column to export.');
+      return;
+    }
+    const path = await exportTransactionsXlsx(
+      {
+        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
+        query: query.trim() || undefined,
+        tx_type: type,
+      },
+      exportCols            // <— pass user selection
+    );
+    alert(`Exported to: ${path}`);
+  };
+
+
+
   const { hidden } = useOutletContext<OutletCtx>();
   const accounts = useAccounts();
 
@@ -99,7 +131,8 @@ export default function Transactions() {
 
   const [type, setType] = useState<TxTypeFilter>('all');
 
-  const [timeSpan, setTimeSpan] = useState<'all' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('all');
+  const [timeSpan, setTimeSpan] =
+    useState<'all' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('all');
   const [pendingCustom, setPendingCustom] = useState<{ from: string; to: string }>({ from: '', to: '' });
 
   const [loading, setLoading] = useState(false);
@@ -116,10 +149,8 @@ export default function Transactions() {
   // prevent races between overlapping fetches
   const reqSeqRef = useRef(0);
 
-  // pull out primitives to stabilize deps (note: these are optional in the type)
-  const {
-    limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
-  } = filters;
+  // pull out primitives to stabilize deps
+  const { limit, offset, sort_by, sort_dir, account_id, date_from, date_to } = filters;
 
   const page = useMemo(
     () => Math.floor((data.offset ?? 0) / (limit ?? PAGE_SIZE)) + 1,
@@ -130,35 +161,13 @@ export default function Transactions() {
     [data.total, limit]
   );
 
-  /* ----- time span presets → set filters (custom uses Apply) ----- */
-  useEffect(() => {
-    const now = new Date();
-    if (timeSpan === 'all') {
-      updateFilters({ date_from: null, date_to: null });
-    } else if (timeSpan === 'this_month') {
-      updateFilters({ date_from: ymd(firstDayOfMonth(now)), date_to: ymd(now) });
-    } else if (timeSpan === 'last_month') {
-      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      updateFilters({ date_from: ymd(firstDayOfMonth(prev)), date_to: ymd(lastDayOfMonth(prev)) });
-    } else if (timeSpan === 'this_year') {
-      updateFilters({ date_from: ymd(firstDayOfYear(now)), date_to: ymd(now) });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeSpan]);
-
-  /* ----- main fetch (NO setFilters inside this effect) ----- */
+  /* ----- main fetch ----- */
   useEffect(() => {
     const mySeq = ++reqSeqRef.current;
     setLoading(true);
 
     const payload: TransactionSearch = {
-      limit,
-      offset,
-      sort_by,
-      sort_dir,
-      account_id,
-      date_from,
-      date_to,
+      limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
       query: query.trim() || undefined,
       tx_type: type,
     };
@@ -166,7 +175,7 @@ export default function Transactions() {
     searchTransactions(payload)
       .then((res) => {
         if (mySeq !== reqSeqRef.current) return; // stale
-        setData(res); // only update data; never filters here
+        setData(res);
       })
       .catch(console.error)
       .finally(() => {
@@ -178,13 +187,7 @@ export default function Transactions() {
     const mySeq = ++reqSeqRef.current;
     setLoading(true);
     const fresh = await searchTransactions({
-      limit,
-      offset,
-      sort_by,
-      sort_dir,
-      account_id,
-      date_from,
-      date_to,
+      limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
       query: query.trim() || undefined,
       tx_type: type,
     });
@@ -209,22 +212,23 @@ export default function Transactions() {
 
   const sumSaldo = (data.sum_income ?? 0) + (data.sum_expense ?? 0);
 
-  const handleExport = async () => {
-    const path = await exportTransactionsXlsx(
-      {
-        limit,
-        offset,
-        sort_by,
-        sort_dir,
-        account_id,
-        date_from,
-        date_to,
-        query: query.trim() || undefined,
-        tx_type: type,
-      },
-      ['date', 'account', 'category', 'description', 'amount']
-    );
-    alert(`Exported to: ${path}`);
+  // --- Time span handling (no effect; explicit handlers) ---
+  const handleTimeSpanChange = (v: 'all' | 'this_month' | 'last_month' | 'this_year' | 'custom') => {
+    setTimeSpan(v);
+    const now = new Date();
+    if (v === 'all') {
+      // Clear date bounds and ask server for LAST PAGE again
+      setFilters(prev => ({ ...prev, date_from: null, date_to: null, offset: -1 }));
+    } else if (v === 'this_month') {
+      updateFilters({ date_from: ymd(firstDayOfMonth(now)), date_to: ymd(now) });
+    } else if (v === 'last_month') {
+      const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      updateFilters({ date_from: ymd(firstDayOfMonth(prevMonth)), date_to: ymd(lastDayOfMonth(prevMonth)) });
+    } else if (v === 'this_year') {
+      updateFilters({ date_from: ymd(firstDayOfYear(now)), date_to: ymd(now) });
+    } else {
+      // 'custom' → show inputs; do nothing until Apply
+    }
   };
 
   // Header click → toggle / set sort (server-side)
@@ -273,7 +277,7 @@ export default function Transactions() {
                 { value: 'custom', label: 'Custom…' },
               ]}
               value={timeSpan}
-              onChange={(v) => setTimeSpan(v as any)}
+              onChange={(v) => handleTimeSpanChange(v as any)}
               placeholder="Time span"
               className="w-full"
             />
@@ -304,7 +308,51 @@ export default function Transactions() {
             />
           </div>
 
-          {/* Sorting moved to table header */}
+          {/* Custom date range (Apply) */}
+          {timeSpan === 'custom' && (
+            <>
+              <div className="sm:col-span-3">
+                <input
+                  type="date"
+                  className="input h-10 w-full"
+                  value={pendingCustom.from}
+                  onChange={(e) => setPendingCustom(p => ({ ...p, from: e.target.value }))}
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <input
+                  type="date"
+                  className="input h-10 w-full"
+                  value={pendingCustom.to}
+                  onChange={(e) => setPendingCustom(p => ({ ...p, to: e.target.value }))}
+                />
+              </div>
+              <div className="sm:col-span-2 flex gap-2">
+                <button
+                  className="btn h-10 px-3"
+                  onClick={() => {
+                    updateFilters({
+                      date_from: pendingCustom.from || null,
+                      date_to: pendingCustom.to || null,
+                    });
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  className="btn h-10 px-3"
+                  onClick={() => {
+                    setPendingCustom({ from: '', to: '' });
+                    setTimeSpan('all');
+                    // Clear bounds and go to LAST page again
+                    setFilters(prev => ({ ...prev, date_from: null, date_to: null, offset: -1 }));
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Table (server order; header controls sorting) */}
@@ -315,8 +363,8 @@ export default function Transactions() {
             hidden={hidden}
             onDelete={id => setConfirmTxId(id)}
             onUpdate={handleUpdateTx}
-            sortBy={(sort_by ?? 'date') as TxSortBy}   // safe defaults fix TS error
-            sortDir={(sort_dir ?? 'asc') as TxSortDir} // safe defaults fix TS error
+            sortBy={(sort_by ?? 'date') as TxSortBy}
+            sortDir={(sort_dir ?? 'asc') as TxSortDir}
             onRequestSort={handleHeaderSort}
           />
         </div>
@@ -390,12 +438,28 @@ export default function Transactions() {
           </label>
         </div>
 
+        {/* === NEW: choose columns === */}
         <div className="mt-3 space-y-2 text-sm">
           <div className="font-medium">Choose columns</div>
-          <div className="text-neutral-500">Date, Account, Category, Notes, Value</div>
+          <div className="grid grid-cols-2 gap-2">
+            {ALL_EXPORT_COLS.map(c => (
+              <label key={c.key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={exportCols.includes(c.key)}
+                  onChange={() => toggleExportCol(c.key)}
+                />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
         </div>
 
-        <button className="btn btn-primary w-full mt-4" onClick={handleExport} disabled={loading}>
+        <button
+          className="btn btn-primary w-full mt-4"
+          onClick={handleExport}
+          disabled={loading || exportCols.length === 0}
+        >
           Export
         </button>
 

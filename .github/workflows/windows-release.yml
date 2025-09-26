@@ -56,16 +56,27 @@ jobs:
             npx --yes "@tauri-apps/cli@^1" icon "src-tauri/icons/app-icon.png"
           }
 
+      - name: Print Tauri CLI + config
+        shell: pwsh
+        run: |
+          npx tauri --version
+          if (Test-Path 'src-tauri\tauri.conf.json') {
+            $cfg = Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json
+            "bundle.active = $($cfg.tauri.bundle.active)"
+            "bundle.targets = $($cfg.tauri.bundle.targets -join ',')"
+            "bundle.identifier = $($cfg.tauri.bundle.identifier)"
+          } else { "src-tauri/tauri.conf.json not found" }
+
       - name: Build frontend
         run: npm run build
 
-      # Force predictable output under ./target
-      - name: Tauri build (NSIS)
+      # Force predictable output and force Windows target
+      - name: Tauri build (NSIS, verbose)
         env:
           CARGO_TARGET_DIR: target
-        run: npm run tauri:build -- --bundles nsis -v
+        run: npx tauri build --bundles nsis --ci --target x86_64-pc-windows-msvc -v --config src-tauri/tauri.conf.json
 
-      - name: Preview bundle dir
+      - name: Preview bundle dir(s)
         shell: pwsh
         run: |
           foreach ($d in @('target\release\bundle','src-tauri\target\release\bundle')) {
@@ -74,7 +85,7 @@ jobs:
             else { Write-Host "$d does not exist" }
           }
 
-      - name: Upload artifacts
+      - name: Upload NSIS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-bundles
@@ -83,7 +94,7 @@ jobs:
             **/bundle/nsis/*.nsis.zip
           if-no-files-found: error
 
-      # Optional: also upload the raw exe if bundling ever gets skipped
+      # keep the fallback raw exe upload
       - name: Upload raw exe (fallback)
         if: always()
         uses: actions/upload-artifact@v4

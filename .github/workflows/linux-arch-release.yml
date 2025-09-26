@@ -16,30 +16,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # System deps for Tauri (Arch)
-      - name: Install system dependencies (Arch)
+      # --- Pacman setup: stable mirrors, keyring, full refresh ---
+      - name: Configure fast mirrors & refresh pacman
         shell: bash
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git curl \
+          set -euo pipefail
+          # Use solid mirrors (CDN + kernel.org + archlinux.org fallback)
+          cat >/etc/pacman.d/mirrorlist <<'EOF'
+          Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+          Server = https://mirror.pkgbuild.com/$repo/os/$arch
+          Server = https://mirrors.edge.kernel.org/archlinux/$repo/os/$arch
+          Server = https://archlinux.org/mirrorlist/all/$repo/os/$arch
+          EOF
+          # Keyring first to avoid signature hiccups
+          pacman -Sy --noconfirm archlinux-keyring
+          # Full refresh + no download timeout (CI networks can be slow)
+          pacman -Syyu --noconfirm --disable-download-timeout
+
+      # --- Toolchains & libs needed for Tauri on Linux ---
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          pacman -S --noconfirm --needed \
+            base-devel git curl \
+            nodejs npm \
             gtk3 webkit2gtk libsoup3 libayatana-appindicator librsvg
 
-      # Node 20 inside the container
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      # Rust toolchain
+      # Rust (works fine inside containers)
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Install JS deps
+      # JS deps
       - name: Install frontend deps
         run: npm ci
 
-      # (Optional) ensure icons exist; skip if you already committed icon.ico
+      # Generate icons if icon.ico is missing (safe no-op if present)
       - name: Generate Tauri icons (if missing)
         shell: bash
         run: |
@@ -47,11 +58,11 @@ jobs:
             npx --yes @tauri-apps/cli@^1 icon src-tauri/icons/app-icon.png
           fi
 
-      # Build your React/Vite app
+      # Build React/Vite
       - name: Build frontend
         run: npm run build
 
-      # Tauri Linux bundling (AppImage). Force outputs into ./target for predictable paths.
+      # Build AppImage; force outputs into repo-root ./target for predictable paths
       - name: Tauri build (AppImage)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -67,7 +78,7 @@ jobs:
             echo "target/release/bundle does not exist"
           fi
 
-      # Find the produced AppImage reliably
+      # Find produced AppImage
       - name: Find AppImage
         id: find_img
         shell: bash
@@ -77,17 +88,17 @@ jobs:
             echo "No AppImage found." >&2
             exit 1
           fi
-          echo "path=$FILE" >> $GITHUB_OUTPUT
+          echo "path=$FILE" >> "$GITHUB_OUTPUT"
           echo "Found: $FILE"
 
-      # Upload as workflow artifact (handy for manual runs)
+      # Upload as workflow artifact (useful on manual runs)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-appimage
           path: ${{ steps.find_img.outputs.path }}
 
-      # Publish a GitHub Release and attach the AppImage (on tag pushes)
+      # Attach to tag release automatically
       - name: Publish GitHub Release (attach AppImage)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

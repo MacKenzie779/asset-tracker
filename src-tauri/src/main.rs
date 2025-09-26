@@ -5,40 +5,12 @@ use printpdf::{Mm, PdfLayerReference, Line, Point, Color, Rgb, IndirectFontRef};
 use serde::{Deserialize, Serialize};
 use sqlx::Arguments;
 use sqlx::{
-  sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
-  QueryBuilder, Row, Sqlite, SqlitePool,
+  sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions}, Row, SqlitePool,
 };
 use tauri::{Manager, State};
-
-/* ---------- Assets ---------- */
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct Asset {
-  id: i64,
-  name: String,
-  category: Option<String>,
-  purchase_date: Option<String>,
-  value: f64,
-  notes: Option<String>,
-  created_at: String,
-  updated_at: String,
-}
-#[derive(Debug, Deserialize)]
-struct NewAsset {
-  name: String,
-  category: Option<String>,
-  purchase_date: Option<String>,
-  value: f64,
-  notes: Option<String>,
-}
-#[derive(Debug, Deserialize)]
-struct UpdateAsset {
-  id: i64,
-  name: Option<String>,
-  category: Option<String>,
-  purchase_date: Option<String>,
-  value: Option<f64>,
-  notes: Option<String>,
-}
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 
 /* ---------- Accounts & Transactions ---------- */
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -135,73 +107,6 @@ async fn get_or_create_category_id(
   Ok(Some(rec.get::<i64, _>(0)))
 }
 
-/* ---------- Asset commands ---------- */
-#[tauri::command]
-async fn add_asset(state: State<'_, AppState>, input: NewAsset) -> Result<i64, String> {
-  let pool = current_pool(&state).await;
-
-  let rec = sqlx::query(
-    r#"INSERT INTO assets (name, category, purchase_date, value, notes)
-       VALUES (?1, ?2, ?3, ?4, ?5);"#,
-  )
-  .bind(input.name)
-  .bind(input.category)
-  .bind(input.purchase_date)
-  .bind(input.value)
-  .bind(input.notes)
-  .execute(&pool)
-  .await
-  .map_err(|e| e.to_string())?;
-  Ok(rec.last_insert_rowid())
-}
-
-#[tauri::command]
-async fn list_assets(state: State<'_, AppState>) -> Result<Vec<Asset>, String> {
-  let pool = current_pool(&state).await;
-
-  sqlx::query_as::<_, Asset>(
-    r#"SELECT id, name, category, purchase_date, value, notes, created_at, updated_at
-       FROM assets
-       ORDER BY created_at DESC, id DESC;"#,
-  )
-  .fetch_all(&pool)
-  .await
-  .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn delete_asset(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
-  let pool = current_pool(&state).await;
-
-  let res = sqlx::query("DELETE FROM assets WHERE id = ?1")
-    .bind(id)
-    .execute(&pool)
-    .await
-    .map_err(|e| e.to_string())?;
-  Ok(res.rows_affected() > 0)
-}
-
-#[tauri::command]
-async fn update_asset(state: State<'_, AppState>, input: UpdateAsset) -> Result<bool, String> {
-  let pool = current_pool(&state).await;
-
-  let mut qb = QueryBuilder::<Sqlite>::new("UPDATE assets SET ");
-  let mut any_change = false;
-  {
-    let mut s = qb.separated(", ");
-    if let Some(name) = input.name { any_change = true; s.push("name = ").push_bind(name); }
-    if let Some(category) = input.category { any_change = true; s.push("category = ").push_bind(category); }
-    if let Some(purchase_date) = input.purchase_date { any_change = true; s.push("purchase_date = ").push_bind(purchase_date); }
-    if let Some(value) = input.value { any_change = true; s.push("value = ").push_bind(value); }
-    if let Some(notes) = input.notes { any_change = true; s.push("notes = ").push_bind(notes); }
-    if !any_change { return Ok(false); }
-    s.push("updated_at = CURRENT_TIMESTAMP");
-  }
-  qb.push(" WHERE id = ").push_bind(input.id);
-  let res = qb.build().execute(&pool).await.map_err(|e| e.to_string())?;
-  Ok(res.rows_affected() > 0)
-}
-
 /* ---------- Finance commands ---------- */
 #[derive(Debug, Deserialize)]
 struct NewAccountInput {
@@ -277,7 +182,7 @@ async fn list_transactions(state: State<'_, AppState>, limit: Option<i64>) -> Re
       a.name  AS account_name,
       a.color AS account_color,
       t.date,
-      COALESCE(c.name, t.category) AS category,
+      c.name AS category,
       t.description,
       t.amount
     FROM transactions t
@@ -457,7 +362,7 @@ fn build_where(filters: &TxSearch, where_sql: &mut String, args: &mut Vec<BindAr
     let like = format!("%{}%", q.to_lowercase());
     where_sql.push_str(
       " AND (LOWER(t.description) LIKE ? \
-         OR LOWER(COALESCE(c.name, t.category, '')) LIKE ?) ",
+         OR LOWER(c.name) LIKE ?) ",
     );
     args.push(BindArg::S(like.clone()));
     args.push(BindArg::S(like));
@@ -470,7 +375,7 @@ fn build_order(filters: &TxSearch) -> String {
     _ => "ASC",
   };
   let primary = match filters.sort_by.as_deref() {
-    Some("category")    => "COALESCE(c.name, t.category)",
+    Some("category")    => "c.name",
     Some("description") => "t.description",
     Some("amount")      => "t.amount",
     Some("account")     => "a.name",
@@ -522,7 +427,7 @@ async fn search_transactions(
   // Items
   let mut sql_items = String::from(
     "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id"
@@ -560,7 +465,7 @@ async fn search_transactions(
 
   // Start from the same WHERE (filters), then add "not transfer" for sums only
   let mut where_sums = where_sql.clone();
-  where_sums.push_str(" AND LOWER(COALESCE(c.name, t.category, '')) <> 'transfer' ");
+  where_sums.push_str(" AND LOWER(c.name) <> 'transfer' ");
 
   sql_sums.push_str(&where_sums);
 
@@ -607,7 +512,7 @@ async fn export_transactions_xlsx(
   /* ---------- Fetch all matching rows (no paging) ---------- */
   let mut sql = String::from(
     "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id"
@@ -839,7 +744,7 @@ async fn export_transactions_pdf(
 
   let mut sql = String::from(
     "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id"
@@ -1311,7 +1216,7 @@ async fn compute_reimbursable_slice(
         r#"
         SELECT
           t.id, t.account_id, a.name AS account_name, a.color AS account_color,
-          t.date, COALESCE(c.name, t.category) AS category, t.description, t.amount
+          t.date, c.name AS category, t.description, t.amount
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
         LEFT JOIN categories c ON c.id = t.category_id
@@ -1881,41 +1786,117 @@ async fn current_pool(state: &State<'_, AppState>) -> SqlitePool {
 }
 
 async fn build_encrypted_pool(db_path: &str, passphrase: &str) -> Result<SqlitePool, sqlx::Error> {
-  let pass_owned = passphrase.to_owned();   // ✅ own it
-  let opts = SqliteConnectOptions::new()
-    .filename(db_path)
-    .create_if_missing(false)
-    .pragma("key", pass_owned)              // ✅ move owned String in
-    .pragma("cipher_compatibility", "4")
-    .journal_mode(SqliteJournalMode::Wal)
-    .foreign_keys(true);
-  SqlitePoolOptions::new().max_connections(5).connect_with(opts).await
+    let pass_owned = passphrase.to_owned(); // must be owned
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .create_if_missing(false)
+        .pragma("key", pass_owned)            // FIRST thing that runs
+        .pragma("cipher_compatibility", "4"); // DB Browser defaults
+
+    SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(opts)
+        .await
 }
 
-#[tauri::command]
-async fn create_database(state: State<'_, AppState>, db_path: String, passphrase: String) -> Result<(), String> {
-  let opts = SqliteConnectOptions::new()
-    .filename(&db_path)
-    .create_if_missing(true)
-    .pragma("key", passphrase.clone())      // ✅ not &passphrase
-    .pragma("cipher_compatibility", "4")
-    .journal_mode(SqliteJournalMode::Wal)
-    .foreign_keys(true);
-  let pool = SqlitePoolOptions::new().max_connections(5).connect_with(opts).await.map_err(|e| e.to_string())?;
-  sqlx::migrate!("./migrations").run(&pool).await.map_err(|e| e.to_string())?;
-  *state.pool.write().await = pool;
-  Ok(())
-}
 
 #[tauri::command]
-async fn open_database(state: State<'_, AppState>, db_path: String, passphrase: String) -> Result<(), String> {
-  // If you call the helper, it already clones internally:
-  let pool = build_encrypted_pool(&db_path, &passphrase).await.map_err(|e| format!("Open failed: {e}"))?;
-  let _: i64 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await.map_err(|e| format!("Unlock failed: {e}"))?;
-  sqlx::migrate!("./migrations").run(&pool).await.map_err(|e| e.to_string())?;
-  *state.pool.write().await = pool;
-  Ok(())
+async fn create_database(
+    state: State<'_, AppState>,
+    db_path: String,
+    passphrase: String,
+) -> Result<(), String> {
+    // Create + key
+    let pass_owned = passphrase.clone();
+    let opts = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true)
+        .pragma("key", pass_owned)
+        .pragma("cipher_compatibility", "4");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(opts)
+        .await
+        .map_err(|e| map_notadb(&e.to_string(), &db_path))?;
+
+    // Set runtime PRAGMAs after unlock
+    let _ = sqlx::query("PRAGMA foreign_keys = ON;").execute(&pool).await;
+    let _ = sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await;
+
+    // Create schema
+    sqlx::migrate!("./migrations").run(&pool).await.map_err(|e| e.to_string())?;
+    *state.pool.write().await = pool;
+    Ok(())
 }
+
+
+
+
+fn looks_like_plain_sqlite(path: &str) -> bool {
+    if let Ok(mut f) = File::open(path) {
+        let mut hdr = [0u8; 16];
+        if f.read_exact(&mut hdr).is_ok() {
+            return &hdr == b"SQLite format 3\0";
+        }
+    }
+    false
+}
+
+fn map_notadb(err_text: &str, db_path: &str) -> String {
+    let notadb = err_text.contains("file is not a database")
+        || err_text.contains("file is encrypted")
+        || err_text.contains("not a database"); // different wordings
+
+    if notadb {
+        if looks_like_plain_sqlite(db_path) {
+            "This file looks like a regular (unencrypted) SQLite database — not an SQLCipher-encrypted DB."
+                .into()
+        } else {
+            "Incorrect password for this encrypted database.".into()
+        }
+    } else {
+        format!("Open failed: {err_text}")
+    }
+}
+
+
+#[tauri::command]
+async fn open_database(
+    state: State<'_, AppState>,
+    db_path: String,
+    passphrase: String,
+) -> Result<(), String> {
+    if !Path::new(&db_path).exists() {
+        return Err("The selected file does not exist.".into());
+    }
+
+    // Connect with key first
+    let pool = match build_encrypted_pool(&db_path, &passphrase).await {
+        Ok(p) => p,
+        Err(e) => return Err(map_notadb(&e.to_string(), &db_path)),
+    };
+
+    // Force touching the real file (this fails immediately on wrong key)
+    if let Err(e) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master;")
+        .fetch_one(&pool)
+        .await
+    {
+        return Err(map_notadb(&e.to_string(), &db_path));
+    }
+
+    // Now safe to set other PRAGMAs
+    let _ = sqlx::query("PRAGMA foreign_keys = ON;").execute(&pool).await;
+    let _ = sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await;
+
+    // Migrate and swap in
+    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+        return Err(e.to_string());
+    }
+    *state.pool.write().await = pool;
+    Ok(())
+}
+
 
 
 #[tauri::command]
@@ -1967,7 +1948,6 @@ pub fn run() {
       open_database, create_database, close_database,
 
       // (keep your existing commands)
-      add_asset, list_assets, delete_asset, update_asset,
       add_account, list_accounts, list_transactions, add_transaction, update_transaction,
       delete_transaction, delete_account, update_account,
       list_categories, add_category, update_category, delete_category,

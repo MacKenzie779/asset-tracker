@@ -33,10 +33,7 @@ jobs:
         shell: pwsh
         run: |
             if (!(Test-Path 'src-tauri\icons\icon.ico')) {
-            if (!(Test-Path 'src-tauri\icons\app-icon.png')) {
-                throw "Missing src-tauri/icons/app-icon.png"
-            }
-            npx --yes @tauri-apps/cli icon src-tauri/icons/app-icon.png
+            npx --yes "@tauri-apps/cli@^1" icon "src-tauri/icons/app-icon.png"
             }
 
       - name: Build frontend

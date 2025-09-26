@@ -40,7 +40,9 @@ jobs:
         run: npm run build
 
       - name: Tauri build (NSIS)
-        run: npm run tauri:build -- --bundles nsis
+        env:
+            CARGO_TARGET_DIR: target
+        run: npm run tauri:build -- --bundles nsis -v
 
       - name: Preview bundle dir
         shell: pwsh
@@ -51,8 +53,8 @@ jobs:
         with:
             name: windows-bundles
             path: |
-                src-tauri/target/release/bundle/nsis/*.exe
-                src-tauri/target/release/bundle/nsis/*.zip
+                target/release/bundle/nsis/*.exe
+                target/release/bundle/nsis/*.zip
 
       # Uncomment this block if you prefer artifacts instead of a Release
       # - name: Upload Windows bundles (no GitHub Release)

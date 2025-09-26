@@ -43,7 +43,7 @@ export default function Layout() {
 
         {/* Optional: sidebar footer area (profile/version/etc.) */}
         <div className="px-4 py-3 text-xs text-neutral-500 border-t border-neutral-200/60 dark:border-neutral-800/60">
-          v0.1.0
+          v0.1.2
         </div>
       </aside>
 

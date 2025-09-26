@@ -55,21 +55,38 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # Force outputs into ./target so paths are predictable
       - name: Tauri build (NSIS)
         env:
-          CARGO_TARGET_DIR: target       # predictable output path
+          CARGO_TARGET_DIR: ${{ github.workspace }}\target
         run: npx tauri build --bundles nsis -v
 
       - name: Preview bundle dir (debug)
+        if: always()
         shell: pwsh
         run: |
           if (Test-Path 'target\release\bundle') {
             Get-ChildItem -Recurse target\release\bundle | Format-Table Length, FullName
           } else {
-            Write-Host "target\\release\\bundle does not exist"
+            Write-Host "target\release\bundle does not exist"
           }
 
-      # ✅ Auto-create & publish a Release for tag pushes
+      # Find the produced *-setup.exe reliably
+      - name: Find NSIS setup
+        id: find_nsis
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem -Recurse -File -Path 'target\release\bundle' -Include '*-setup.exe' | Select-Object -First 1
+          if (-not $file) { throw "NSIS setup exe not found under target\release\bundle" }
+          "path=$($file.FullName -replace '\\','/')" >> $env:GITHUB_OUTPUT
+          Write-Host "Found NSIS: $($file.FullName)"
+
+      - name: Upload artifacts (installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundles
+          path: ${{ steps.find_nsis.outputs.path }}
+
       - name: Publish GitHub Release (attach installer)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -77,17 +94,4 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          # uses the pushed tag by default
-          files: |
-            target/release/bundle/nsis/*-setup.exe
-            target/release/bundle/nsis/*.nsis.zip
-
-      # (optional) keep artifact for convenience, even on tag builds
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-bundles
-          path: |
-            target/release/bundle/nsis/*-setup.exe
-            target/release/bundle/nsis/*.nsis.zip
-          if-no-files-found: warn
+          files: ${{ steps.find_nsis.outputs.path }}

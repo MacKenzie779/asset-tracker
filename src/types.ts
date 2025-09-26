@@ -84,4 +84,3 @@ export type TransactionSearchResult = {
   sum_income_reimb?: number;
   sum_expense_reimb?: number;
 };
-

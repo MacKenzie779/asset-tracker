@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/api/dialog";
+import loginBg from "../assets/wallpaper/sajad.jpg"; 
 
 // Optional wallpaper (leave empty for gradient background)
-const WALLPAPER_URL = "src/wallpaper/sajad.jpg"; // e.g. "/wallpapers/login.jpg" or "https://…"
+const WALLPAPER_URL = loginBg;
 
 export default function Login() {
   const [path, setPath] = useState("");

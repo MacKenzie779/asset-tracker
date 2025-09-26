@@ -32,7 +32,7 @@ jobs:
       - name: Generate Tauri icons (if missing)
         run: |
           if (!(Test-Path src-tauri\icons\icon.ico)) {
-            npx @tauri-apps/cli icon assets/app-icon.png
+            npx @tauri-apps/cli src-tauri/icons/app-icon.png
           }
 
       - name: Build frontend

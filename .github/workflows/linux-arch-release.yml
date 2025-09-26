@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- Pacman setup: stable mirrors, keyring, full refresh ---
+      # Pacman: stable mirrors + full refresh (avoids flaky mirrors)
       - name: Configure fast mirrors & refresh pacman
         shell: bash
         run: |
@@ -29,7 +29,7 @@ jobs:
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syyu --noconfirm --disable-download-timeout
 
-      # --- Toolchains & libs needed for Tauri on Linux ---
+      # Toolchains & Tauri deps
       - name: Install build dependencies
         shell: bash
         run: |
@@ -38,15 +38,12 @@ jobs:
             nodejs npm \
             gtk3 webkit2gtk libsoup3 libayatana-appindicator librsvg
 
-      # Rust toolchain
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # JS deps
       - name: Install frontend deps
         run: npm ci
 
-      # Generate icons if icon.ico is missing (safe no-op if present)
       - name: Generate Tauri icons (if missing)
         shell: bash
         run: |
@@ -54,17 +51,17 @@ jobs:
             npx --yes @tauri-apps/cli@^1 icon src-tauri/icons/app-icon.png
           fi
 
-      # Build React/Vite
       - name: Build frontend
         run: npm run build
 
-      # Build AppImage; force outputs into ./target for predictable paths
+      # Build AppImage; force outputs into ./target and SKIP STRIP to avoid RELR issue
       - name: Tauri build (AppImage)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          NO_STRIP: "1"                 # <- disable appimagetool/linuxdeploy strip
+          LINUXDEPLOY_NO_STRIP: "1"     # <- belt & suspenders (some plugins honor this)
         run: npx tauri build --bundles appimage -v
 
-      # Debug listing
       - name: Preview bundle dir
         if: always()
         run: |
@@ -74,7 +71,6 @@ jobs:
             echo "target/release/bundle does not exist"
           fi
 
-      # Find produced AppImage
       - name: Find AppImage
         id: find_img
         shell: bash
@@ -87,14 +83,12 @@ jobs:
           echo "path=$FILE" >> "$GITHUB_OUTPUT"
           echo "Found: $FILE"
 
-      # Upload as workflow artifact (useful on manual runs)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-appimage
           path: ${{ steps.find_img.outputs.path }}
 
-      # Attach to tag release automatically
       - name: Publish GitHub Release (attach AppImage)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

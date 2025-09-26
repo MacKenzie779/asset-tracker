@@ -31,7 +31,10 @@
       }
     ],
     "bundle": {
-       "identifier": "com.github.mackenzie779.assettracker",
+      "active": true,
+      "targets": ["nsis"],
+      "identifier": "com.github.mackenzie779.assettracker",
+      "icon": ["icons/icon.ico","icons/icon.icns","icons/icon.png"],
       "windows": {
         "webviewInstallMode": { "type": "downloadBootstrapper" }
       }

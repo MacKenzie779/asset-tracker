@@ -46,7 +46,11 @@ jobs:
 
       - name: Preview bundle dir
         shell: pwsh
-        run: Get-ChildItem -Recurse src-tauri\target\release\bundle | Format-Table Length, FullName
+        run: |
+            Write-Host "`n== src-tauri target =="
+            Get-ChildItem -Recurse src-tauri\target\release\bundle | Format-Table Length, FullName
+            Write-Host "`n== root target =="
+            Get-ChildItem -Recurse target\release\bundle | Format-Table Length, FullName
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

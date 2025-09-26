@@ -10,15 +10,15 @@ jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
-      contents: write   # needed if you let the action create a release
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
-        cache: "npm"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -32,24 +32,22 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # Option A: build + create a draft GitHub Release with the installer attached
       - name: Build & release with tauri-action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # only build the Windows EXE (NSIS), skip MSI/WiX
           args: "--bundles nsis"
-          tagName: assettracker-v__VERSION__          # __VERSION__ resolved from your project
+          tagName: assettracker-v__VERSION__
           releaseName: "AssetTracker v__VERSION__"
           releaseBody: "Windows build attached. See assets below."
           releaseDraft: true
           prerelease: false
 
-      # Option B (uncomment to use instead of Option A): upload as an artifact without a Release
+      # Uncomment this block if you prefer artifacts instead of a Release
       # - name: Upload Windows bundles (no GitHub Release)
       #   uses: actions/upload-artifact@v4
       #   with:
       #     name: windows-bundles
       #     path: |
-      #       target/**/bundle/nsis/*.exe
+      #       target\release\bundle\nsis\*.exe

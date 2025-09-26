@@ -32,12 +32,26 @@
     ],
     "bundle": {
       "active": true,
-      "targets": ["nsis"],
       "identifier": "com.github.mackenzie779.assettracker",
-      "icon": ["icons/icon.ico","icons/icon.icns","icons/icon.png"],
+     
+      "targets": ["nsis", "appimage"],
+
+     
+      "icon": [
+        "icons/icon.ico",
+        "icons/icon.icns",
+        "icons/icon.png"
+      ],
+
+     
       "windows": {
         "webviewInstallMode": { "type": "downloadBootstrapper" }
-      }
+      },
+
+    
+      "category": "Finance",
+      "shortDescription": "Local-first expense tracker",
+      "longDescription": "Track accounts and transactions locally with export and stats."
     }
   },
   "build": {

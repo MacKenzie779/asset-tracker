@@ -1,0 +1,98 @@
+name: linux-arch-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  linux-arch:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # System deps for Tauri (Arch)
+      - name: Install system dependencies (Arch)
+        shell: bash
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git curl \
+            gtk3 webkit2gtk libsoup3 libayatana-appindicator librsvg
+
+      # Node 20 inside the container
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # Rust toolchain
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Install JS deps
+      - name: Install frontend deps
+        run: npm ci
+
+      # (Optional) ensure icons exist; skip if you already committed icon.ico
+      - name: Generate Tauri icons (if missing)
+        shell: bash
+        run: |
+          if [ ! -f "src-tauri/icons/icon.ico" ]; then
+            npx --yes @tauri-apps/cli@^1 icon src-tauri/icons/app-icon.png
+          fi
+
+      # Build your React/Vite app
+      - name: Build frontend
+        run: npm run build
+
+      # Tauri Linux bundling (AppImage). Force outputs into ./target for predictable paths.
+      - name: Tauri build (AppImage)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: npx tauri build --bundles appimage -v
+
+      # Debug listing
+      - name: Preview bundle dir
+        if: always()
+        run: |
+          if [ -d "target/release/bundle" ]; then
+            find target/release/bundle -maxdepth 3 -type f -printf "%p (%k KB)\n"
+          else
+            echo "target/release/bundle does not exist"
+          fi
+
+      # Find the produced AppImage reliably
+      - name: Find AppImage
+        id: find_img
+        shell: bash
+        run: |
+          FILE="$(find target/release/bundle/appimage -type f -name "*.AppImage" | head -n1 || true)"
+          if [ -z "$FILE" ]; then
+            echo "No AppImage found." >&2
+            exit 1
+          fi
+          echo "path=$FILE" >> $GITHUB_OUTPUT
+          echo "Found: $FILE"
+
+      # Upload as workflow artifact (handy for manual runs)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: ${{ steps.find_img.outputs.path }}
+
+      # Publish a GitHub Release and attach the AppImage (on tag pushes)
+      - name: Publish GitHub Release (attach AppImage)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: ${{ steps.find_img.outputs.path }}

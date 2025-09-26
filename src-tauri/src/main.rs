@@ -287,12 +287,29 @@ async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool,
 async fn delete_account(state: tauri::State<'_, AppState>, id: i64) -> Result<bool, String> {
   let pool = current_pool(&state).await;
 
+  // refuse if any transactions reference this account
+  let cnt: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE account_id = ?1")
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  if cnt > 0 {
+    return Err(format!(
+      "This account has {} transaction(s). Move or delete them first.",
+      cnt
+    ));
+  }
+
   let res = sqlx::query("DELETE FROM accounts WHERE id = ?1")
     .bind(id)
-    .execute(&pool).await
+    .execute(&pool)
+    .await
     .map_err(|e| e.to_string())?;
+
   Ok(res.rows_affected() > 0)
 }
+
 
 #[tauri::command]
 async fn update_account(

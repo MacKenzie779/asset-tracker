@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE TABLE IF NOT EXISTS transactions (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id   INTEGER NOT NULL
-                 REFERENCES accounts(id) ON DELETE CASCADE,
+                 REFERENCES accounts(id) ON DELETE RESTRICT,
   date         TEXT NOT NULL,        -- 'YYYY-MM-DD'
   description  TEXT,
   amount       REAL NOT NULL,        -- income > 0, expense < 0

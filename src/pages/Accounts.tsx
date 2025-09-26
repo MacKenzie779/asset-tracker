@@ -33,6 +33,7 @@ export default function Accounts() {
   const { hidden } = useOutletContext<LayoutOutletContext>();
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // dialogs
   const [openCreate, setOpenCreate] = useState(false);
@@ -163,12 +164,34 @@ export default function Accounts() {
       <ConfirmDialog
         open={confirmId !== null}
         title="Delete account?"
-        description="This will also delete all transactions in this account. This action cannot be undone."
+        description="You can delete an account only if it has no transactions."
         confirmText="Delete"
         cancelText="Cancel"
         danger
         onCancel={() => setConfirmId(null)}
-        onConfirm={confirmDelete}
+        onConfirm={async () => {
+          if (confirmId == null) return;
+          try {
+            await deleteAccount(confirmId);      // will throw if transactions exist
+            setConfirmId(null);
+            await refresh();
+          } catch (e: any) {
+            setConfirmId(null);
+            const msg =
+              typeof e === 'string' ? e :
+              e?.message ?? 'Unable to delete this account because it still has transactions.';
+            setErrorMsg(msg);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={errorMsg !== null}
+        title="Cannot delete account"
+        description={errorMsg ?? ''}
+        confirmText="OK"
+        onCancel={() => setErrorMsg(null)}
+        onConfirm={() => setErrorMsg(null)}
       />
     </div>
   );

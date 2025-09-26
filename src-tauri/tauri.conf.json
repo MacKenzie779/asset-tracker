@@ -29,7 +29,12 @@
         "height": 720,
         "resizable": true
       }
-    ]
+    ],
+    "bundle": {
+      "windows": {
+        "webviewInstallMode": { "type": "downloadBootstrapper" }
+      }
+    }
   },
   "build": {
     "beforeDevCommand": "npm run dev",

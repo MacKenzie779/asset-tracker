@@ -26,13 +26,24 @@ jobs:
       - name: (Windows) Install NSIS for bundling
         run: choco install nsis -y
 
-      # verify NSIS is usable; if this fails, bundling would be skipped
+      # ➜ Add NSIS to PATH for this job (covers common install locations)
+      - name: Add NSIS to PATH
+        shell: pwsh
+        run: |
+          foreach ($p in @(
+            'C:\Program Files (x86)\NSIS\Bin',
+            'C:\Program Files\NSIS\Bin',
+            'C:\ProgramData\chocolatey\bin'
+          )) {
+            if (Test-Path $p) { echo $p >> $env:GITHUB_PATH }
+          }
+
+      # Quick sanity check
       - name: Verify NSIS
         shell: pwsh
         run: |
-          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-            throw "NSIS (makensis) not on PATH"
-          }
+          $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $cmd) { throw "NSIS (makensis) not on PATH" }
           makensis -VERSION
 
       - name: Install frontend deps
@@ -48,14 +59,13 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # force predictable output under ./target/
+      # Force predictable output under ./target
       - name: Tauri build (NSIS)
         env:
           CARGO_TARGET_DIR: target
         run: npm run tauri:build -- --bundles nsis -v
 
-      # 🔎 robust preview: don't fail if a path is missing
-      - name: Preview bundle dir(s)
+      - name: Preview bundle dir
         shell: pwsh
         run: |
           foreach ($d in @('target\release\bundle','src-tauri\target\release\bundle')) {
@@ -64,8 +74,7 @@ jobs:
             else { Write-Host "$d does not exist" }
           }
 
-      # 📦 upload installers from either location
-      - name: Upload NSIS artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-bundles
@@ -74,7 +83,7 @@ jobs:
             **/bundle/nsis/*.nsis.zip
           if-no-files-found: error
 
-      # (optional) also upload the raw exe in case bundling was skipped
+      # Optional: also upload the raw exe if bundling ever gets skipped
       - name: Upload raw exe (fallback)
         if: always()
         uses: actions/upload-artifact@v4

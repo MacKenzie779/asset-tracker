@@ -23,6 +23,8 @@ export default function Stats() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txAll, setTxAll] = useState<TxMini[]>([]);
   const [loading, setLoading] = useState(true);
+  type TxForCat = { amount: number; category?: string | null };
+  const [txCatItems, setTxCatItems] = useState<TxForCat[]>([]);
 
   // controls
   const [groupBy, setGroupBy] = useState<'monthly' | 'yearly'>('monthly');
@@ -47,6 +49,34 @@ export default function Stats() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+  (async () => {
+    try {
+      const pageSize = 1000;
+      let offset = 0;
+      const all: TxForCat[] = [];
+      while (true) {
+        const res = await searchTransactions({
+          tx_type: 'expense', // only expenses
+          limit: pageSize,
+          offset,
+          sort_by: 'id',
+          sort_dir: 'asc',
+        });
+        const items = (res.items ?? []) as any[];
+        all.push(...items.map(it => ({ amount: it.amount, category: it.category })));
+        const total: number = (res as any).total ?? items.length;
+        offset += pageSize;
+        if (offset >= total) break;
+      }
+      setTxCatItems(all);
+    } catch (e) {
+      console.error('fetch categories failed', e);
+      setTxCatItems([]);
+    }
+  })();
+}, []);
 
   /* =========================
      Derived values / helpers
@@ -183,27 +213,42 @@ export default function Stats() {
   }, [accounts]);
 
   // Toggle visibility by account (affects lines & pie)
-const [hiddenAcc, setHiddenAcc] = useState<Set<number>>(new Set());
-const toggleAcc = (id: number) =>
-  setHiddenAcc(prev => {
-    const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
-const isAccHidden = (id: number) => hiddenAcc.has(id);
+  const [hiddenAcc, setHiddenAcc] = useState<Set<number>>(new Set());
+  const toggleAcc = (id: number) =>
+    setHiddenAcc(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const isAccHidden = (id: number) => hiddenAcc.has(id);
 
-const pieRowsVisible = useMemo(
-  () => pieData.rows.filter(r => !hiddenAcc.has(r.id)),
-  [pieData.rows, hiddenAcc]
-);
+  const pieRowsVisible = useMemo(
+    () => pieData.rows.filter(r => !hiddenAcc.has(r.id)),
+    [pieData.rows, hiddenAcc]
+  );
 
-
+  // ==== NEW: Expenses by category (Transfer, Init excluded) ====
+const expensesByCategory = useMemo(() => {
+  const sums = new Map<string, number>();
+  for (const t of txCatItems) {
+    const name = (t.category ?? 'Uncategorized').toString();
+    const lc = name.toLowerCase();
+    if (lc === 'transfer' || lc === 'transfers' || lc === 'init') continue; // special buckets out
+    const v = Math.abs(t.amount ?? 0);
+    if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
+  }
+  const rows = Array.from(sums.entries())
+    .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
+    .sort((a, b) => b.value - a.value);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  return { rows, total };
+}, [txCatItems]);
 
   /* =========================
          UI
      ========================= */
   return (
-    <div className="mx-auto w-full max-w-[1680px] px-6 py-4 grid gap-6">
+    <div className="mx-auto w-full max-w={[1680]}px px-6 py-4 grid gap-6">
       {/* Top cards */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="card p-5">
@@ -240,20 +285,20 @@ const pieRowsVisible = useMemo(
           <ResponsiveContainer>
             <PieChart>
               <Pie
-  data={pieRowsVisible}
-  dataKey="value"
-  nameKey="name"
-  cx="50%"
-  cy="50%"
-  outerRadius={110}
-  label={({ name, percent }: { name?: string; percent?: number }) =>
-    `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-  }
->
-  {pieRowsVisible.map((r) => (
-    <Cell key={r.id} fill={r.color} />
-  ))}
-</Pie>
+                data={pieRowsVisible}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={110}
+                label={({ name, percent }: { name?: string; percent?: number }) =>
+                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+                }
+              >
+                {pieRowsVisible.map((r) => (
+                  <Cell key={r.id} fill={r.color} />
+                ))}
+              </Pie>
 
               <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
               <RLegend />
@@ -261,6 +306,42 @@ const pieRowsVisible = useMemo(
           </ResponsiveContainer>
         </div>
         {pieData.rows.length === 0 && (
+          <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+        )}
+      </section>
+
+      {/* ==== NEW: Expenses by category (Pie) ==== */}
+      <section className="card p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Expenses by category</h2>
+          <span className="text-xs text-neutral-500">Transfers excluded</span>
+        </div>
+
+        <div className="mt-3 w-full" style={{ height: 320 }}>
+          <ResponsiveContainer>
+            <PieChart>
+              <Pie
+                data={expensesByCategory.rows}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={110}
+                label={({ name, percent }: { name?: string; percent?: number }) =>
+                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+                }
+              >
+                {expensesByCategory.rows.map((r, idx) => (
+                  <Cell key={idx} fill={r.color} />
+                ))}
+              </Pie>
+              <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+              <RLegend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        {expensesByCategory.rows.length === 0 && (
           <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
         )}
       </section>
@@ -303,32 +384,32 @@ const pieRowsVisible = useMemo(
                 labelFormatter={(l:any)=> l}
               />
               <RLegend
-  onClick={(entry: any) => {
-    // Expect dataKey of form 'acc_<id>' or 'total'
-    const key = entry?.dataKey as string | undefined;
-    if (!key) return;
-    if (key === 'total') return; // keep Total always visible (optional)
-    if (key.startsWith('acc_')) {
-      const id = Number(key.slice(4));
-      if (Number.isFinite(id)) toggleAcc(id);
-    }
-  }}
-/>
+                onClick={(entry: any) => {
+                  // Expect dataKey of form 'acc_<id>' or 'total'
+                  const key = entry?.dataKey as string | undefined;
+                  if (!key) return;
+                  if (key === 'total') return; // keep Total always visible (optional)
+                  if (key.startsWith('acc_')) {
+                    const id = Number(key.slice(4));
+                    if (Number.isFinite(id)) toggleAcc(id);
+                  }
+                }}
+              />
               {/* Total line */}
               <Line type="monotone" dataKey="total" name="Total" stroke="#111827" strokeWidth={2} dot={false} />
               {/* Per-account lines */}
               {accountLines.map((l) => (
-  <Line
-    key={l.id}
-    type="monotone"
-    dataKey={l.key}
-    name={l.name}
-    stroke={l.color}
-    strokeWidth={1.8}
-    dot={false}
-    hide={isAccHidden(l.id)}   // <-- toggle visibility
-  />
-))}
+                <Line
+                  key={l.id}
+                  type="monotone"
+                  dataKey={l.key}
+                  name={l.name}
+                  stroke={l.color}
+                  strokeWidth={1.8}
+                  dot={false}
+                  hide={isAccHidden(l.id)}   // <-- toggle visibility
+                />
+              ))}
 
               {series.data.length > 20 && <Brush dataKey="key" height={20} />}
             </LineChart>

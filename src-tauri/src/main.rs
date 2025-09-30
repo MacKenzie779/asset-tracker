@@ -131,15 +131,25 @@ async fn add_account(state: State<'_, AppState>, input: NewAccountInput) -> Resu
   if let Some(amount) = input.initial_balance {
     if amount != 0.0 {
       let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+      // ensure "Init" category exists and get its id
+      let cat_id = get_or_create_category_id(&pool, Some("Init".to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
+
       sqlx::query(
-        r#"INSERT INTO transactions (account_id, date, description, amount)
-           VALUES (?1, ?2, ?3, ?4);"#,
+        r#"
+          INSERT INTO transactions (account_id, date, description, amount, category_id)
+          VALUES (?1, ?2, ?3, ?4, ?5);
+        "#,
       )
       .bind(account_id)
       .bind(date)
       .bind("Initial balance")
       .bind(amount)
-      .execute(&pool).await
+      .bind(cat_id) // <-- set category "Init"
+      .execute(&pool)
+      .await
       .map_err(|e| e.to_string())?;
     }
   }
@@ -482,7 +492,7 @@ async fn search_transactions(
 
   // Start from the same WHERE (filters), then add "not transfer" for sums only
   let mut where_sums = where_sql.clone();
-  where_sums.push_str(" AND LOWER(c.name) <> 'transfer' ");
+  where_sums.push_str(" AND LOWER(c.name) NOT IN ('transfer', 'init') ");
 
   sql_sums.push_str(&where_sums);
 
@@ -709,8 +719,17 @@ async fn export_transactions_xlsx(
       }
     }
 
-    if item.amount > 0.0 { sum_income += item.amount; }
-    if item.amount < 0.0 { sum_expense += item.amount; } // negative
+        let is_special = item.category.as_deref()
+      .map(|s| {
+        let s = s.to_ascii_lowercase();
+        s == "transfer" || s == "init"
+      })
+      .unwrap_or(false);
+
+    if !is_special {
+      if item.amount > 0.0 { sum_income += item.amount; }
+      if item.amount < 0.0 { sum_expense += item.amount; }
+    }
   }
 
   /* ---------- Summary ---------- */
@@ -942,8 +961,13 @@ async fn export_transactions_pdf(
     // horizontal hairline
     draw_rect(&layer_ref, m_l.0, y, content_w, 0.1, None, Some((grid(), 0.18)));
 
-    if it.amount > 0.0 { sum_income += it.amount; }
-    if it.amount < 0.0 { sum_expense += it.amount; }
+    let cat = it.category.as_deref().unwrap_or("");
+let is_special = matches!(cat.to_ascii_lowercase().as_str(), "transfer" | "init");
+
+if !is_special {
+  if it.amount > 0.0 { sum_income += it.amount; }
+  if it.amount < 0.0 { sum_expense += it.amount; }
+}
 
     y -= row_h;
   }

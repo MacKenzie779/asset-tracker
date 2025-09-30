@@ -352,7 +352,7 @@ const expensesByCategory = useMemo(() => {
           <h2 className="text-base font-semibold">Value over time</h2>
           <div className="flex gap-2">
             <select
-              className="input h-9"
+              className="input"
               value={groupBy}
               onChange={(e) => setGroupBy(e.target.value as any)}
               title="Grouping"
@@ -361,7 +361,7 @@ const expensesByCategory = useMemo(() => {
               <option value="yearly">Yearly</option>
             </select>
             <select
-              className="input h-9"
+              className="input"
               value={range}
               onChange={(e) => setRange(e.target.value as any)}
               title="Range"

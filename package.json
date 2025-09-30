@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "node dev-with-tag-version.mjs",
+    "tauri:build": "node build-with-tag-version.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^1.5.4",

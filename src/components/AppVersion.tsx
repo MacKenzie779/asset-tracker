@@ -2,25 +2,28 @@
 import { useEffect, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 
-// If you also keep the Vite define, declare it (optional fallback):
-declare const __APP_VERSION__: string | undefined;
+declare const __APP_VERSION__: string;
 
 export default function AppVersion() {
-  const [ver, setVer] = useState<string>('');
+  const [ver, setVer] = useState('v…');
+
   useEffect(() => {
     (async () => {
+      // In dev, show the Git tag injected by Vite
+      if (import.meta.env.DEV && __APP_VERSION__) {
+        setVer(__APP_VERSION__);
+        return;
+      }
+      // In packaged builds, show the app version (from tauri.conf / package.json)
       try {
-        const v = await getVersion();   // e.g. "0.1.4"
+        const v = await getVersion(); // e.g. "0.1.4"
         setVer(`v${v}`);
       } catch {
-        // fallback to build-time define if present
-        if (typeof __APP_VERSION__ === 'string' && __APP_VERSION__) {
-          setVer(__APP_VERSION__);
-        } else {
-          setVer('vdev');
-        }
+        setVer(__APP_VERSION__ || 'vdev');
       }
     })();
   }, []);
+
   return <span>{ver}</span>;
 }
+

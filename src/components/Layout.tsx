@@ -20,15 +20,15 @@ export default function Layout() {
     loc.pathname === '/' ? 'Home' :
     loc.pathname.startsWith('/transactions') ? 'Transactions' :
     loc.pathname.startsWith('/accounts') ? 'Accounts' :
-    loc.pathname.startsWith('/categories') ? 'Categories' :  // ← added
+    loc.pathname.startsWith('/categories') ? 'Categories' :
     loc.pathname.startsWith('/stats') ? 'Stats' :
     'Settings';
 
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 flex">
+    // CHANGED: min-h-screen -> h-screen overflow-hidden
+    <div className="h-screen overflow-hidden bg-neutral-50 dark:bg-neutral-950 flex">
       {/* LEFT SIDEBAR NAV (vertical) */}
       <aside className="w-60 shrink-0 border-r border-neutral-200/60 dark:border-neutral-800/60 bg-white/90 dark:bg-neutral-900/80 backdrop-blur flex flex-col">
-        {/* (If your Figma has a logo/header in the sidebar, put it here) */}
         <div className="h-14 flex items-center px-4">
           <div className="text-xl font-semibold">AssetTracker</div>
         </div>
@@ -41,34 +41,25 @@ export default function Layout() {
           <NavItem to="/stats" active={loc.pathname.startsWith('/stats')} label="Stats" icon={IconChart} />
         </nav>
 
-        {/* Optional: sidebar footer area (profile/version/etc.) */}
         <div className="px-4 py-3 text-xs text-neutral-500 border-t border-neutral-200/60 dark:border-neutral-800/60">
-          v0.1.2
+          {__APP_VERSION__}
         </div>
       </aside>
 
-      {/* RIGHT: HEADER + CONTENT + FOOTER */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        {/* HEADER (center title, actions on right/left) */}
+      {/* CHANGED: add min-h-0 so the child <main> can scroll */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-0">
         <header className="h-14 flex items-center justify-between px-4 border-b border-neutral-200/60 dark:border-neutral-800/60 bg-white/90 dark:bg-neutral-900/80 backdrop-blur">
-          <div className="flex items-center gap-2">
-            {/* If your Figma has a back button or extra icon on the left, add it here */}
-          </div>
+          <div className="flex items-center gap-2" />
           <div className="text-sm font-semibold tracking-wide">{title}</div>
           <div className="flex items-center gap-2">
             <HideAmountsToggle hidden={hidden} onToggle={() => setHidden(v => !v)} />
           </div>
         </header>
 
-        {/* PAGE BODY */}
-        <main className="flex-1 overflow-y-auto">
+        {/* CHANGED: add min-h-0; keep overflow-y-auto so only page content scrolls */}
+        <main className="flex-1 min-h-0 overflow-y-auto">
           <Outlet context={{ hidden, setHidden }} />
         </main>
-
-        {/* FOOTER (thin status/footer like in Home.png) */}
-        {/* <footer className="px-4 py-3 text-xs text-neutral-500 border-t border-neutral-200/60 dark:border-neutral-800/60 bg-white/80 dark:bg-neutral-900/70 backdrop-blur">
-          Database lives in your App Data directory; everything stays on your machine.
-        </footer> */}
       </div>
     </div>
   );
@@ -93,7 +84,7 @@ function NavItem({
   );
 }
 
-/* Inline icons (tweak stroke/size to match Figma exactly) */
+/* Icons */
 function IconHome({ className='' }) {
   return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><path d="M3 11.5 12 4l9 7.5V20a2 2 0 0 1-2 2h-5v-6H10v6H5a2 2 0 0 1-2-2z" strokeWidth="1.8"/></svg>;
 }
@@ -109,7 +100,6 @@ function IconChart({ className='' }) {
 function IconCog({ className='' }) {
   return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3" strokeWidth="1.8"/><path d="M19 12a7 7 0 0 0-.16-1.5l2.11-1.64-2-3.46-2.5 1A7 7 0 0 0 14.5 4l-.5-3h-4l-.5 3a7 7 0 0 0-1.95 1.4l-2.5-1-2 3.46L5.16 10.5A7 7 0 0 0 5 12c0 .51.06 1.01.16 1.5l-2.11 1.64 2 3.46 2.5-1c.57.56 1.24 1.02 1.95 1.4l.5 3h4l.5-3a7 7 0 0 0 1.95-1.4l2.5 1 2-3.46-2.11-1.64c.1-.49.16-.99.16-1.5Z" strokeWidth="1.2"/></svg>;
 }
-/* NEW */
 function IconTag({ className='' }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor">

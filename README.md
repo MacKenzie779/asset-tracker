@@ -1,26 +1,29 @@
+# AssetTracker
 
-# AssetTracker (Tauri + React + Rust + SQLite)
+*Local-first desktop expense tracker — **Tauri (Rust)** + **React/Vite/TS** + **SQLite/SQLCipher**.*
 
-Local-first, fast desktop app starter. Beautiful UI with Tailwind; Rust core with SQLite.
+> **Privacy-first & offline.** Your data lives on your machine, encrypted at rest.
 
-## Prereqs (Arch Linux)
+---
+
+## 🧱 Tech stack
+
+* **Desktop shell:** Tauri (Rust)
+* **Frontend:** React + Vite + TypeScript + Tailwind
+* **DB:** SQLite via `sqlx` (SQLCipher-compatible)
+* **PDF:** `printpdf` with tuned table layout & clipping
+* **XLSX:** `rust_xlsxwriter` with autosizing + EU formats
+
+---
+
+## 🚀 Quickstart (npm)
+
+**Prereqs:** Node 20+, Rust (stable), Tauri deps.
+*(If you build yourself: ensure the SQLite runtime is SQLCipher-enabled.)*
+
 ```bash
-sudo pacman -S --needed base-devel rustup nodejs npm sqlite webkit2gtk gtk3 libappindicator-gtk3 librsvg
-rustup default stable   # if you haven't already
-```
-
-## Get started
-```bash
-cd assettracker-tauri
 npm install
 npm run tauri:dev
-```
-
-## Build a release binary
-```bash
+# build installers/bundles
 npm run tauri:build
 ```
-
-## Where is my data?
-The SQLite DB is created under your OS app data dir, e.g.
-`~/.local/share/AssetTracker/assettracker.db` (exact path depends on your environment).

@@ -2,8 +2,7 @@ name: linux-arch-release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -15,8 +14,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # <-- fetch tags
 
-      # Pacman: stable mirrors + full refresh (avoids flaky mirrors)
+      # Pacman mirrors + refresh ...
       - name: Configure fast mirrors & refresh pacman
         shell: bash
         run: |
@@ -29,7 +30,6 @@ jobs:
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syyu --noconfirm --disable-download-timeout
 
-      # Toolchains & Tauri deps
       - name: Install build dependencies
         shell: bash
         run: |
@@ -44,6 +44,11 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # <<< NEW: sync package.json version to Git tag (v0.1.4 -> 0.1.4)
+      - name: Set app version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+
       - name: Generate Tauri icons (if missing)
         shell: bash
         run: |
@@ -54,12 +59,11 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # Build AppImage; force outputs into ./target and SKIP STRIP to avoid RELR issue
       - name: Tauri build (AppImage)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
-          NO_STRIP: "1"                 # <- disable appimagetool/linuxdeploy strip
-          LINUXDEPLOY_NO_STRIP: "1"     # <- belt & suspenders (some plugins honor this)
+          NO_STRIP: "1"
+          LINUXDEPLOY_NO_STRIP: "1"
         run: npx tauri build --bundles appimage -v
 
       - name: Preview bundle dir
@@ -97,5 +101,3 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: ${{ steps.find_img.outputs.path }}
-
-          

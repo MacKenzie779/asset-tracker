@@ -2,8 +2,7 @@ name: windows-release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -13,6 +12,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # <-- fetch tags
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -45,6 +46,14 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # <<< NEW: sync package.json version to Git tag (v0.1.4 -> 0.1.4)
+      - name: Set app version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME -replace '^v',''
+          npm version --no-git-tag-version $ver
+
       - name: Generate Tauri icons (if missing)
         shell: pwsh
         run: |
@@ -55,7 +64,6 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # Force outputs into ./target so paths are predictable
       - name: Tauri build (NSIS)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}\target
@@ -71,7 +79,6 @@ jobs:
             Write-Host "target\release\bundle does not exist"
           }
 
-      # Find the produced *-setup.exe reliably
       - name: Find NSIS setup
         id: find_nsis
         shell: pwsh

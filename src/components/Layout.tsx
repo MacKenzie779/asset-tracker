@@ -1,6 +1,7 @@
 import { Outlet, useLocation, Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import HideAmountsToggle from './HideAmountsToggle';
+import AppVersion from './AppVersion';
 
 export type LayoutOutletContext = {
   hidden: boolean;
@@ -42,7 +43,7 @@ export default function Layout() {
         </nav>
 
         <div className="px-4 py-3 text-xs text-neutral-500 border-t border-neutral-200/60 dark:border-neutral-800/60">
-          {__APP_VERSION__}
+          <AppVersion />
         </div>
       </aside>
 

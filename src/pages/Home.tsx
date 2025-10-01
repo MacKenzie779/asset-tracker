@@ -100,7 +100,7 @@ export default function Home() {
       </section>
 
       {/* Main area; you set this width already */}
-      <section className="mt-6 grid items-start gap-6 grid-cols-1 2xl:grid-cols-[minmax(1280px,1fr)_minmax(60px,480px)]">
+      <section className="mt-6 grid items-start gap-6 grid-cols-1 2xl:grid-cols-[minmax(1200px,1fr)_minmax(60px,480px)]">
         {/* Left: transactions */}
         <div>
           <div className="card">

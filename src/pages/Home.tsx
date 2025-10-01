@@ -99,52 +99,57 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Main area; you set this width already */}
-      <section className="mt-6 grid items-start gap-6 grid-cols-1 
-      lg:grid-cols-[minmax(640px,1fr)_minmax(300px,420px)]
-      xl:grid-cols-[minmax(900px,1fr)_minmax(320px,480px)]
-      2xl:grid-cols-[minmax(1200px,1fr)_minmax(60px,480px)]">
-        {/* Left: transactions */}
-        <div className="min-w-0">
-          <div className="card">
-            <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50 flex items-center justify-between">
-              <h2 className="text-base font-semibold">Last transactions</h2>
-              {loading && <span className="text-xs text-neutral-500">Loading…</span>}
-            </div>
+    {/* Main area */}
+    <section
+      className="
+        mt-6 grid items-start
+        gap-4 xl:gap-6
+        grid-cols-1
+        lg:grid-cols-[minmax(0,1fr)_clamp(280px,32vw,420px)]
+        xl:grid-cols-[minmax(0,1fr)_clamp(300px,28vw,480px)]
+        2xl:grid-cols-[minmax(0,1fr)_clamp(320px,26vw,520px)]
+      "
+    >
+      {/* Left: transactions */}
+      <div className="min-w-0">
+        <div className="card">
+          <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50 flex items-center justify-between">
+            <h2 className="text-base font-semibold">Last transactions</h2>
+            {loading && <span className="text-xs text-neutral-500">Loading…</span>}
+          </div>
 
-            {/* Table (shows newest at the BOTTOM via internal reverse) */}
-            <div className="overflow-auto">
-              <TransactionsTable
-                items={tx}
-                accounts={accounts}
-                hidden={hidden}
-                onDelete={requestDeleteTx}    // open project dialog
-                onUpdate={handleUpdateTx}
-              />
-            </div>
+          {/* Only the table can scroll horizontally if it must */}
+          <div className="overflow-x-auto">
+            <TransactionsTable
+              items={tx}
+              accounts={accounts}
+              hidden={hidden}
+              onDelete={requestDeleteTx}
+              onUpdate={handleUpdateTx}
+            />
+          </div>
 
-            {/* Add row at the bottom */}
-            <div className="border-t border-neutral-200/50 dark:border-neutral-800/50">
-              <TransactionAddRow accounts={accounts} onAdd={handleAddTx} />
-            </div>
+          <div className="border-t border-neutral-200/50 dark:border-neutral-800/50">
+            <TransactionAddRow accounts={accounts} onAdd={handleAddTx} />
           </div>
         </div>
+      </div>
 
-        {/* Right: accounts overview + Manage button */}
-        <div className="min-w-[300px]">
-          <div className="card">
-            <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50">
-              <h2 className="text-base font-semibold">Accounts overview</h2>
-            </div>
-            <AccountsList items={accounts} hidden={hidden} />
-            <div className="p-3 border-t border-neutral-200/50 dark:border-neutral-800/50">
-              <Link to="/accounts" className="btn btn-primary w-full">
-                Manage accounts
-              </Link>
-            </div>
+      {/* Right: accounts */}
+      <div className="min-w-0">
+        <div className="card">
+          <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50">
+            <h2 className="text-base font-semibold">Accounts overview</h2>
+          </div>
+          <AccountsList items={accounts} hidden={hidden} />
+          <div className="p-3 border-t border-neutral-200/50 dark:border-neutral-800/50">
+            <Link to="/accounts" className="btn btn-primary w-full">
+              Manage accounts
+            </Link>
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
       {/* Pretty confirm dialog for transaction delete */}
       <ConfirmDialog

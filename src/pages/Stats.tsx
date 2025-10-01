@@ -275,40 +275,97 @@ const expensesByCategory = useMemo(() => {
         </div>
       </section>
 
-      {/* Split by account (Pie) */}
-      <section className="card p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Total value split by account</h2>
-          {loading && <span className="text-xs text-neutral-500">Loading…</span>}
-        </div>
-        <div className="mt-3 w-full" style={{ height: 320 }}>
-          <ResponsiveContainer>
-            <PieChart>
-              <Pie
-                data={pieRowsVisible}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={110}
-                label={({ name, percent }: { name?: string; percent?: number }) =>
-                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-                }
-              >
-                {pieRowsVisible.map((r) => (
-                  <Cell key={r.id} fill={r.color} />
-                ))}
-              </Pie>
+{/* Split by account (Pie) */}
+<section className="card p-5">
+  <div className="flex items-center justify-between">
+    <h2 className="text-base font-semibold">Total value split by account</h2>
+    {loading && <span className="text-xs text-neutral-500">Loading…</span>}
+  </div>
 
-              <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
-              <RLegend />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        {pieData.rows.length === 0 && (
-          <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
-        )}
-      </section>
+  <div className="mt-3 w-full" style={{ height: 320 }}>
+    <ResponsiveContainer>
+      <PieChart>
+        <Pie
+          data={pieRowsVisible}
+          dataKey="value"
+          nameKey="name"
+          cx="50%"
+          cy="50%"
+          outerRadius={110}
+          label={({ name, percent }: { name?: string; percent?: number }) =>
+            `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+          }
+        >
+          {pieRowsVisible.map((r) => (
+            <Cell
+              key={r.id}
+              fill={r.color}
+              cursor="pointer"
+              onClick={() => toggleAcc(r.id)} // <-- toggle by clicking a slice
+            />
+          ))}
+        </Pie>
+
+        <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+        {/* Remove the default Legend to avoid confusion; we render our own clickable chips below */}
+      </PieChart>
+    </ResponsiveContainer>
+  </div>
+
+  {/* Clickable legend chips (independent toggles for the pie) */}
+  <div className="mt-3 flex flex-wrap gap-2">
+    {pieData.rows.map((r) => {
+      const hidden = isAccHidden(r.id);
+      return (
+        <button
+          key={r.id}
+          onClick={() => toggleAcc(r.id)}
+          className={[
+            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm transition",
+            hidden
+              ? "opacity-50 ring-1 ring-neutral-400 hover:opacity-70"
+              : "bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+          ].join(' ')}
+          title={hidden ? "Show account" : "Hide account"}
+        >
+          <span
+            className="inline-block h-3 w-3 rounded-sm"
+            style={{ background: r.color }}
+          />
+          <span className="whitespace-nowrap">{r.name}</span>
+        </button>
+      );
+    })}
+  </div>
+
+  {/* Optional quick actions */}
+  {pieData.rows.length > 0 && (
+    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+      <button
+        className="btn-secondary px-2 py-1"
+        onClick={() => {
+          // show all: clear the hidden set
+          setHiddenAcc(new Set());
+        }}
+      >
+        Show all
+      </button>
+      <button
+        className="btn-secondary px-2 py-1"
+        onClick={() => {
+          // hide all accounts that currently appear in the pie
+          setHiddenAcc(new Set(pieData.rows.map(r => r.id)));
+        }}
+      >
+        Hide all
+      </button>
+    </div>
+  )}
+
+  {pieData.rows.length === 0 && (
+    <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+  )}
+</section>
 
       {/* ==== NEW: Expenses by category (Pie) ==== */}
       <section className="card p-5">

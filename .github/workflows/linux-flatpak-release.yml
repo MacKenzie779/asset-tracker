@@ -42,6 +42,8 @@ jobs:
           npm run build
 
       - name: Build .deb with Tauri
+        env:
+            CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
           npm run tauri:build -- --bundles deb -v
 

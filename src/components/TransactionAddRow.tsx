@@ -127,7 +127,7 @@ export default function TransactionAddRow({
       </div>
 
       {/* 12-col grid; md+ stays on one line; account pickers use AccountSelect (same design as CategorySelect) */}
-      <div className="grid grid-cols-12 md:grid-cols-[repeat(48,minmax(0,1fr))] gap-2 items-center">
+      <div className="grid grid-cols-12 md:grid-cols-[repeat(45,minmax(0,1fr))] gap-2 items-center">
         {/* Date * */}
         <input
           ref={dateRef}
@@ -151,7 +151,7 @@ export default function TransactionAddRow({
 
             {/* Notes */}
             <input
-              className="input h-9 col-span-12 md:col-span-10"
+              className="input h-9 col-span-12 md:col-span-9"
               placeholder="Notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -171,7 +171,7 @@ export default function TransactionAddRow({
             />
 
             {/* Account * — same design as CategorySelect */}
-            <div className={cx('col-span-12 md:col-span-8', flagInvalid(isEmptyAccount(accountId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+            <div className={cx('col-span-12 md:col-span-7', flagInvalid(isEmptyAccount(accountId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={accountId}
@@ -182,7 +182,7 @@ export default function TransactionAddRow({
             </div>
 
             {/* Reimbursable (optional) — same width as Account */}
-            <div className="col-span-12 md:col-span-8">
+            <div className="col-span-12 md:col-span-7">
               <AccountSelect
                 options={reimbursable}
                 value={reimId}
@@ -216,7 +216,7 @@ export default function TransactionAddRow({
             />
 
             {/* Source * */}
-            <div className={cx('col-span-12 md:col-span-10', flagInvalid(srcId === '') && 'ring-1 ring-red-500/70 rounded-xl')}>
+            <div className={cx('col-span-12 md:col-span-9', flagInvalid(srcId === '') && 'ring-1 ring-red-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={srcId}
@@ -227,7 +227,7 @@ export default function TransactionAddRow({
             </div>
 
             {/* Destination * */}
-            <div className={cx('col-span-12 md:col-span-10', flagInvalid(dstId === '' || (srcId !== '' && dstId === srcId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+            <div className={cx('col-span-12 md:col-span-9', flagInvalid(dstId === '' || (srcId !== '' && dstId === srcId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={dstId}

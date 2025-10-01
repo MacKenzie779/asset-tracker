@@ -130,6 +130,7 @@ export default function Home() {
             <TransactionAddRow accounts={accounts} onAdd={handleAddTx} />
           </div>
         </div>
+        <div className="h-12 md:h-30" aria-hidden />
       </div>
 
 {/* Right: accounts overview + Manage button */}

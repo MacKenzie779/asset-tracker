@@ -16,10 +16,6 @@ finish-args:
   # If you use the Single Instance plugin:
   # - --own-name=org.de_mackenzie_AssetTracker.SingleInstance
 
-# Make the .desktop/.icons from your .deb line up with the Flatpak app-id
-rename-desktop-file: com.github.mackenzie779.assettracker.desktop
-rename-icon: com.github.mackenzie779.assettracker
-rename-appdata-file: com.github.mackenzie779.assettracker.metainfo.xml
 
 modules:
   - name: assettracker
@@ -28,10 +24,21 @@ modules:
       - type: file
         path: assettracker.deb    # we copy the built .deb here in CI
     build-commands:
-      # Extract the .deb into /app
       - bsdtar --to-stdout -xf assettracker.deb data.* | bsdtar -x -C /app -f -
-      # Ensure the binary is on PATH for "command:"
-      - install -d /app/bin && ln -sf /app/usr/bin/assettracker /app/bin/assettracker
+      - install -d /app/bin && ln -sf /app/usr/bin/asset-tracker /app/bin/assettracker
+      # rename whatever we find to match app-id and icon expectations
+      - |
+        df=$(ls /app/usr/share/applications/*.desktop | head -n1)
+        install -D "$df" "/app/usr/share/applications/com.github.mackenzie779.assettracker.desktop"
+      - |
+        for size in 16 24 32 48 64 128 256 512; do
+          d="/app/usr/share/icons/hicolor/${size}x${size}/apps"
+          if ls "$d"/*.png >/dev/null 2>&1; then
+            for f in "$d"/*.png; do
+              install -D "$f" "$d/com.github.mackenzie779.assettracker.png"
+            done
+          fi
+        done
     cleanup:
       - /usr/share/doc
       - /usr/share/man

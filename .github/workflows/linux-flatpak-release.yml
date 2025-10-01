@@ -67,11 +67,10 @@ jobs:
         run: |
           mkdir -p flatpak
           cp "${{ steps.find_deb.outputs.deb_path }}" flatpak/assettracker.deb
-          # Ensure you committed: flatpak/de.mackenzie.AssetTracker.yml
 
       - name: Build Flatpak repo
         run: |
-          flatpak-builder --force-clean --repo=flatpak-repo flatpak-build-dir flatpak/de.mackenzie.AssetTracker.yml
+          flatpak-builder --force-clean --repo=flatpak-repo flatpak-build-dir flatpak/com.github.mackenzie779.assettracker.yml
 
       - name: Create single-file .flatpak bundle
         run: |

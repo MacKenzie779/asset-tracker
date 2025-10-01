@@ -105,7 +105,7 @@ export default function Home() {
       xl:grid-cols-[minmax(900px,1fr)_minmax(320px,480px)]
       2xl:grid-cols-[minmax(1200px,1fr)_minmax(60px,480px)]">
         {/* Left: transactions */}
-        <div>
+        <div className="min-w-0">
           <div className="card">
             <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50 flex items-center justify-between">
               <h2 className="text-base font-semibold">Last transactions</h2>

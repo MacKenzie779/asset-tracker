@@ -56,10 +56,12 @@ jobs:
 
       - name: Install Flatpak & Builder
         run: |
-          sudo apt-get install -y flatpak flatpak-builder
-          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          # GNOME runtime carries GTK/WebKitGTK
-          flatpak install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
+            sudo apt-get install -y flatpak flatpak-builder
+            flatpak --version
+            # add Flathub for the *user* (no sudo)
+            flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            # install GNOME runtime/SDK for the *user*
+            flatpak --user install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
 
       - name: Prepare Flatpak build dir
         run: |

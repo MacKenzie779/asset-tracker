@@ -8,12 +8,11 @@ on:
 
 jobs:
   build-flatpak:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest     # = Ubuntu 24.04 today
     permissions:
       contents: write
 
     env:
-      # keep Rust artifacts in repo root
       CARGO_TARGET_DIR: target
 
     steps:
@@ -28,13 +27,13 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Tauri Linux build prerequisites (webkit, indicator, svg, etc.)
+      # ✅ 24.04 package names: use 4.1 dev headers, plus bsdtar etc.
       - name: Install system deps for Tauri (deb build)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.0-dev libayatana-appindicator3-dev librsvg2-dev \
-            patchelf pkg-config build-essential curl file
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            pkg-config build-essential curl file patchelf libarchive-tools
 
       - name: Install dependencies & build frontend
         run: |
@@ -52,23 +51,20 @@ jobs:
           echo "deb_path=$DEB" >> "$GITHUB_OUTPUT"
           echo "Found: $DEB"
 
-      # --- Flatpak build ---
-
       - name: Install Flatpak & Builder
         run: |
           sudo apt-get install -y flatpak flatpak-builder
-          flatpak --version
           flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          # GNOME runtime that carries GTK/WebKit
+          # GNOME runtime carries GTK/WebKitGTK
           flatpak install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
 
       - name: Prepare Flatpak build dir
         run: |
           mkdir -p flatpak
           cp "${{ steps.find_deb.outputs.deb_path }}" flatpak/assettracker.deb
-          # Ensure manifest is present in repo at flatpak/de.mackenzie.AssetTracker.yml
+          # Ensure you committed: flatpak/de.mackenzie.AssetTracker.yml
 
-      - name: Build Flatpak (repo)
+      - name: Build Flatpak repo
         run: |
           flatpak-builder --force-clean --repo=flatpak-repo flatpak-build-dir flatpak/de.mackenzie.AssetTracker.yml
 
@@ -86,9 +82,7 @@ jobs:
           path: AssetTracker_*_x86_64.flatpak
 
       - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            AssetTracker_*_x86_64.flatpak
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: AssetTracker_*_x86_64.flatpak

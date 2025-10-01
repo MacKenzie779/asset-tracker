@@ -75,7 +75,7 @@ jobs:
       - name: Create single-file .flatpak bundle
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          flatpak build-bundle flatpak-repo AssetTracker_${VER}_x86_64.flatpak de.mackenzie.AssetTracker \
+          flatpak build-bundle flatpak-repo AssetTracker_${VER}_x86_64.flatpak com.github.mackenzie779.assettracker \
             --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
           ls -lh AssetTracker_*_x86_64.flatpak
 

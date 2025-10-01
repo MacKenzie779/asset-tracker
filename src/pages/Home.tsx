@@ -104,8 +104,6 @@ export default function Home() {
   className="
     mt-6 grid items-start gap-4 xl:gap-6
     grid-cols-1
-    lg:grid-cols-[minmax(0,1fr)_clamp(240px,22vw,340px)]
-    xl:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]
     2xl:grid-cols-[minmax(0,1fr)_clamp(280px,18vw,380px)]
   "
     >

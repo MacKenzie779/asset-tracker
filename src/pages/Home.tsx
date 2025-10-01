@@ -135,7 +135,7 @@ export default function Home() {
       </div>
 
 {/* Right: accounts overview + Manage button */}
-<div className="min-w-0 hidden lg:block">
+<div className="min-w-0 hidden xl:block">
   <div className="card">
     <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50">
       <h2 className="text-base font-semibold">Accounts overview</h2>

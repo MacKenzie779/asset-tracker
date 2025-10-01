@@ -134,20 +134,20 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Right: accounts */}
-      <div className="min-w-0">
-        <div className="card">
-          <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50">
-            <h2 className="text-base font-semibold">Accounts overview</h2>
-          </div>
-          <AccountsList items={accounts} hidden={hidden} />
-          <div className="p-3 border-t border-neutral-200/50 dark:border-neutral-800/50">
-            <Link to="/accounts" className="btn btn-primary w-full">
-              Manage accounts
-            </Link>
-          </div>
-        </div>
-      </div>
+{/* Right: accounts overview + Manage button */}
+<div className="min-w-0 hidden lg:block">
+  <div className="card">
+    <div className="p-3 border-b border-neutral-200/50 dark:border-neutral-800/50">
+      <h2 className="text-base font-semibold">Accounts overview</h2>
+    </div>
+    <AccountsList items={accounts} hidden={hidden} />
+    <div className="p-3 border-t border-neutral-200/50 dark:border-neutral-800/50">
+      <Link to="/accounts" className="btn btn-primary w-full">
+        Manage accounts
+      </Link>
+    </div>
+  </div>
+</div>
     </section>
 
       {/* Pretty confirm dialog for transaction delete */}

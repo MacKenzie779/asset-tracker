@@ -359,9 +359,9 @@ export default function Transactions() {
 
   return (
     <div className="px-3 sm:px-4 md:px-6 pt-4 grid gap-6 2
-    lg:grid-cols-[minmax(640px,1fr)_minmax(300px,420px)]
-    xl:grid-cols-[minmax(900px,1fr)_minmax(320px,480px)]
-    2xl:grid-cols-[minmax(1280px,1fr)_minmax(60px,480px)]">
+    lg:grid-cols-[minmax(0,1fr)_clamp(240px,22vw,340px)]
+    xl:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]
+    2xl:grid-cols-[minmax(0,1fr)_clamp(280px,18vw,380px)]">
       {/* Left column */}
       <div className="card">
         {/* Filters */}

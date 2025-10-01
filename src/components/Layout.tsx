@@ -30,7 +30,7 @@ export default function Layout() {
     <div className="h-screen overflow-hidden bg-neutral-50 dark:bg-neutral-950 flex">
       {/* LEFT SIDEBAR NAV (vertical) */}
       <aside className="w-60 shrink-0 border-r border-neutral-200/60 dark:border-neutral-800/60 bg-white/90 dark:bg-neutral-900/80 backdrop-blur flex flex-col">
-        <div className="h-14 flex items-center px-4">
+        <div className="h-14 flex items-center 2xl:px-4">
           <div className="text-xl font-semibold">AssetTracker</div>
         </div>
 

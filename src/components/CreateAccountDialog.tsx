@@ -1,6 +1,30 @@
 import { useEffect, useState } from 'react';
 import type { NewAccount } from '../types';
 
+// --- same parser as in TransactionAddRow ---
+function parseAmountString(s: string): number | null {
+  if (s == null) return null;
+  let t = s.trim().replace(/\s/g, '');
+  if (t === '') return null;
+  const hasC = t.includes(',');
+  const hasD = t.includes('.');
+  if (hasC && hasD) {
+    const lastC = t.lastIndexOf(',');
+    const lastD = t.lastIndexOf('.');
+    t = lastC > lastD ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+  } else if (hasC) {
+    t = t.replace(',', '.');
+  }
+  if (/^[-+]?\d+[.]$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+// de-DE pretty format without currency symbol
+function formatDE(n: number) {
+  return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export default function CreateAccountDialog({
   open,
   onClose,
@@ -13,7 +37,11 @@ export default function CreateAccountDialog({
   const [name, setName] = useState('');
   const [color, setColor] = useState('#3b82f6');
   const [accountType, setAccountType] = useState<'standard' | 'reimbursable'>('standard');
-  const [initialBalance, setInitialBalance] = useState<number>(0);
+
+  // store as string so user can type EU format like "1.234,56"
+  const [initialBalanceStr, setInitialBalanceStr] = useState<string>('');
+  const parsedInit = parseAmountString(initialBalanceStr); // number | null
+
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -21,7 +49,7 @@ export default function CreateAccountDialog({
       setName('');
       setColor('#3b82f6');
       setAccountType('standard');
-      setInitialBalance(0);
+      setInitialBalanceStr('');
       setBusy(false);
     }
   }, [open]);
@@ -31,19 +59,24 @@ export default function CreateAccountDialog({
   const submit = async () => {
     const n = name.trim();
     if (!n) return;
+    // allow empty -> 0
+    const value = initialBalanceStr.trim() === '' ? 0 : parsedInit;
+    if (value === null) return; // invalid amount
     setBusy(true);
     try {
       await onCreate({
         name: n,
         color,
         account_type: accountType,
-        initial_balance: Number.isFinite(initialBalance) ? initialBalance : 0,
+        initial_balance: value,
       });
       onClose();
     } finally {
       setBusy(false);
     }
   };
+
+  const amountInvalid = initialBalanceStr.trim() !== '' && parsedInit === null;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -93,26 +126,41 @@ export default function CreateAccountDialog({
                 </select>
               </label>
 
-              {/* Initial balance */}
+              {/* Initial balance — EU input */}
               <label className="col-span-12 flex flex-col gap-1">
                 <span className="label">Initial balance</span>
                 <input
-                  type="number"
-                  step="0.01"
-                  className="input"
-                  value={initialBalance}
-                  onChange={(e) => setInitialBalance(parseFloat(e.target.value))}
-                  placeholder="0.00"
+                  type="text"
+                  inputMode="decimal"
+                  pattern="[0-9]*[.,]?[0-9]*"
+                  className={[
+                    'input',
+                    amountInvalid ? 'ring-1 ring-red-500/70 border-red-500/70 focus:ring-red-500/70 focus:border-red-500/70' : ''
+                  ].join(' ')}
+                  placeholder="0,00"
+                  value={initialBalanceStr}
+                  onChange={(e) => setInitialBalanceStr(e.target.value)}
+                  onBlur={() => {
+                    if (parsedInit !== null) setInitialBalanceStr(formatDE(parsedInit));
+                  }}
+                  title={amountInvalid ? 'Bitte Betrag wie 1.234,56 eingeben' : undefined}
                 />
                 <p className="text-xs text-neutral-500">
-                  This will create an initial transaction. Positive values credit the account; negative values debit it.
+                  This will create an initial transaction
                 </p>
+                {amountInvalid && (
+                  <p className="text-xs text-red-600">Wrong format. Example: 1.234,56</p>
+                )}
               </label>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button className="btn" onClick={onClose}>Cancel</button>
-              <button className="btn btn-primary" onClick={submit} disabled={busy || !name.trim()}>
+              <button
+                className="btn btn-primary"
+                onClick={submit}
+                disabled={busy || !name.trim() || amountInvalid}
+              >
                 {busy ? 'Creating…' : 'Create'}
               </button>
             </div>

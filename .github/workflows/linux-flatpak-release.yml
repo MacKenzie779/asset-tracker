@@ -1,0 +1,94 @@
+name: linux-flatpak-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-flatpak:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      # keep Rust artifacts in repo root
+      CARGO_TARGET_DIR: target
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Tauri Linux build prerequisites (webkit, indicator, svg, etc.)
+      - name: Install system deps for Tauri (deb build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf pkg-config build-essential curl file
+
+      - name: Install dependencies & build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build .deb with Tauri
+        run: |
+          npm run tauri:build -- --bundles deb -v
+
+      - name: Locate .deb
+        id: find_deb
+        run: |
+          DEB=$(ls target/release/bundle/deb/*amd64.deb)
+          echo "deb_path=$DEB" >> "$GITHUB_OUTPUT"
+          echo "Found: $DEB"
+
+      # --- Flatpak build ---
+
+      - name: Install Flatpak & Builder
+        run: |
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak --version
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          # GNOME runtime that carries GTK/WebKit
+          flatpak install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
+
+      - name: Prepare Flatpak build dir
+        run: |
+          mkdir -p flatpak
+          cp "${{ steps.find_deb.outputs.deb_path }}" flatpak/assettracker.deb
+          # Ensure manifest is present in repo at flatpak/de.mackenzie.AssetTracker.yml
+
+      - name: Build Flatpak (repo)
+        run: |
+          flatpak-builder --force-clean --repo=flatpak-repo flatpak-build-dir flatpak/de.mackenzie.AssetTracker.yml
+
+      - name: Create single-file .flatpak bundle
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          flatpak build-bundle flatpak-repo AssetTracker_${VER}_x86_64.flatpak de.mackenzie.AssetTracker \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+          ls -lh AssetTracker_*_x86_64.flatpak
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: AssetTracker_*_x86_64.flatpak
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AssetTracker_*_x86_64.flatpak
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

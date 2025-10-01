@@ -101,14 +101,13 @@ export default function Home() {
 
     {/* Main area */}
     <section
-      className="
-        mt-6 grid items-start
-        gap-4 xl:gap-6
-        grid-cols-1
-        lg:grid-cols-[minmax(0,1fr)_clamp(280px,32vw,420px)]
-        xl:grid-cols-[minmax(0,1fr)_clamp(300px,28vw,480px)]
-        2xl:grid-cols-[minmax(0,1fr)_clamp(320px,26vw,520px)]
-      "
+  className="
+    mt-6 grid items-start gap-4 xl:gap-6
+    grid-cols-1
+    lg:grid-cols-[minmax(0,1fr)_clamp(240px,22vw,340px)]
+    xl:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]
+    2xl:grid-cols-[minmax(0,1fr)_clamp(280px,18vw,380px)]
+  "
     >
       {/* Left: transactions */}
       <div className="min-w-0">

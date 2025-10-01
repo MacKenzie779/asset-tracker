@@ -163,26 +163,31 @@ export default function Transactions() {
 
   // Compute adjusted global totals from backend-provided global sums.
   // Flip sign for reimbursable amounts to avoid double-counting net worth.
-  const adjustedGlobal = useMemo(() => {
-    const si = data.sum_income_std ?? 0;
-    const se = data.sum_expense_std ?? 0;       // negative
-    const ri = data.sum_income_reimb ?? 0;      // positive
-    const re = data.sum_expense_reimb ?? 0;     // negative
+const adjustedGlobal = useMemo(() => {
+  const si = data.sum_income_std ?? 0;
+  const se = data.sum_expense_std ?? 0;   // negative
+  const ri = data.sum_income_reimb ?? 0;  // positive
+  const re = data.sum_expense_reimb ?? 0; // negative
+  const init = data.sum_init ?? 0;
 
-    const income  = si + (-re);  // reimbursable negatives become positives
-    const expense = se + (-ri);  // reimbursable positives become negatives
-    const saldo   = income + expense;
-    return { income, expense, saldo };
-  }, [
-    data.sum_income_std,
-    data.sum_expense_std,
-    data.sum_income_reimb,
-    data.sum_expense_reimb,
-  ]);
+  // Flip reimbursable flows to avoid double-counting net worth
+  const income  = si + (-re);
+  const expense = se + (-ri);
+  const saldo   = income + expense + init; // <-- add Init
+  return { income, expense, saldo };
+}, [
+  data.sum_income_std,
+  data.sum_expense_std,
+  data.sum_income_reimb,
+  data.sum_expense_reimb,
+  data.sum_init, // <-- track
+]);
 
   const showIncome  = isAllAccounts ? adjustedGlobal.income  : (data.sum_income || 0);
   const showExpense = isAllAccounts ? adjustedGlobal.expense : (data.sum_expense || 0);
-  const showSaldo   = isAllAccounts ? adjustedGlobal.saldo   : ((data.sum_income ?? 0) + (data.sum_expense ?? 0));
+  const showSaldo = isAllAccounts
+  ? adjustedGlobal.saldo
+  : ((data.sum_income ?? 0) + (data.sum_expense ?? 0) + (data.sum_init ?? 0));
 
 
   /* ----- main fetch ----- */

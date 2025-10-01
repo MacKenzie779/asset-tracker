@@ -73,15 +73,17 @@ struct TxSearch {
 struct TxSearchResult {
   items: Vec<TransactionOut>,
   total: i64,
-  offset: i64,      // effective offset used (for page calc in UI)
+  offset: i64,
   sum_income: f64,
   sum_expense: f64,
-  // NEW: global sums split by account type (respect current filters, ignore paging)
   sum_income_std: f64,
   sum_expense_std: f64,
   sum_income_reimb: f64,
   sum_expense_reimb: f64,
+  // NEW
+  sum_init: f64,
 }
+
 
 
 /* ---------- Categories (DB-level unique) ---------- */
@@ -507,6 +509,25 @@ async fn search_transactions(
   let (sum_income, sum_expense, inc_std, exp_std, inc_reimb, exp_reimb)
     = q_sums.fetch_one(&pool).await.map_err(|e| e.to_string())?;
 
+    // --- Init sum (only "Init", included in saldo but not in income/expense) ---
+let mut sql_init = String::from(
+  "SELECT COALESCE(SUM(t.amount), 0.0) \
+     FROM transactions t \
+     JOIN accounts a ON a.id = t.account_id \
+     LEFT JOIN categories c ON c.id = t.category_id"
+);
+let mut where_init = where_sql.clone();
+where_init.push_str(" AND LOWER(c.name) = 'init' ");
+sql_init.push_str(&where_init);
+
+let mut q_init = sqlx::query_scalar::<_, f64>(&sql_init);
+for a in &args {
+  match a {
+    BindArg::I(v) => { q_init = q_init.bind(*v); }
+    BindArg::S(s) => { q_init = q_init.bind(s); }
+  }
+}
+let sum_init = q_init.fetch_one(&pool).await.map_err(|e| e.to_string())?;
 
     Ok(TxSearchResult {
     items,
@@ -518,6 +539,7 @@ async fn search_transactions(
     sum_expense_std: exp_std,
     sum_income_reimb: inc_reimb,
     sum_expense_reimb: exp_reimb,
+    sum_init
   })
 }
 
@@ -675,6 +697,7 @@ async fn export_transactions_xlsx(
   /* ---------- Rows + totals ---------- */
   let mut sum_income: f64 = 0.0;
   let mut sum_expense: f64 = 0.0;
+  let mut sum_init: f64   = 0.0;
 
   for (r, item) in items.iter().enumerate() {
     let row = table_start_row + 1 + r as u32;
@@ -719,17 +742,20 @@ async fn export_transactions_xlsx(
       }
     }
 
-        let is_special = item.category.as_deref()
-      .map(|s| {
-        let s = s.to_ascii_lowercase();
-        s == "transfer" || s == "init"
-      })
-      .unwrap_or(false);
+  let lower_cat = item.category
+      .as_deref()
+      .map(|s| s.to_ascii_lowercase())
+      .unwrap_or_default();
+  let is_transfer = lower_cat == "transfer";
+  let is_init     = lower_cat == "init";
 
-    if !is_special {
-      if item.amount > 0.0 { sum_income += item.amount; }
-      if item.amount < 0.0 { sum_expense += item.amount; }
-    }
+  if is_init {
+    sum_init += item.amount; // <— collect initial balance separately
+  }
+  if !is_transfer && !is_init {
+    if item.amount > 0.0 { sum_income += item.amount; }
+    if item.amount < 0.0 { sum_expense += item.amount; }
+  }
   }
 
   /* ---------- Summary ---------- */
@@ -745,7 +771,7 @@ async fn export_transactions_xlsx(
   sheet.write_number_with_format(summary_row_start + 1, value_col, sum_expense, pick_money_fmt(sum_expense)).map_err(|e| e.to_string())?;
   col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(sum_expense));
 
-  let saldo = sum_income + sum_expense;
+  let saldo = sum_init + sum_income + sum_expense; 
   sheet.write_string_with_format(summary_row_start + 2, label_col, "Saldo",          &label_fmt).map_err(|e| e.to_string())?;
   sheet.write_number_with_format(summary_row_start + 2, value_col, saldo, pick_money_fmt(saldo)).map_err(|e| e.to_string())?;
   col_widths[value_col as usize] = col_widths[value_col as usize].max(display_len_amount(saldo));
@@ -908,6 +934,7 @@ async fn export_transactions_pdf(
   /* ---------- rows ---------- */
   let mut sum_income: f64 = 0.0;
   let mut sum_expense: f64 = 0.0;
+  let mut sum_init: f64   = 0.0;
 
   for (row_idx, it) in items.iter().enumerate() {
     // page break (keep some space for summary)
@@ -961,10 +988,17 @@ async fn export_transactions_pdf(
     // horizontal hairline
     draw_rect(&layer_ref, m_l.0, y, content_w, 0.1, None, Some((grid(), 0.18)));
 
-    let cat = it.category.as_deref().unwrap_or("");
-let is_special = matches!(cat.to_ascii_lowercase().as_str(), "transfer" | "init");
+let lower = it.category
+    .as_deref()
+    .map(|s| s.to_ascii_lowercase())
+    .unwrap_or_default();
+let is_transfer = lower == "transfer";
+let is_init     = lower == "init";
 
-if !is_special {
+if is_init {
+  sum_init += it.amount; // <— collect initial balance
+}
+if !is_transfer && !is_init {
   if it.amount > 0.0 { sum_income += it.amount; }
   if it.amount < 0.0 { sum_expense += it.amount; }
 }
@@ -973,7 +1007,7 @@ if !is_special {
   }
 
   /* ---------- summary ---------- */
-  let saldo = sum_income + sum_expense;
+  let saldo = sum_init + sum_income + sum_expense;
   if y < m_b.0 + (row_h * 4.0) {
     let (np, nl) = doc.add_page(page_w, page_h, "Layer");
     page = np;

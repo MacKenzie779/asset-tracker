@@ -24,6 +24,36 @@
 ```bash
 npm install
 npm run tauri:dev
-# build installers/bundles
-npm run tauri:build
+```
+## Install on Linux (Flatpak, auto-updates)
+
+One-time prerequisites:
+
+```bash
+sudo pacman -S flatpak      
+flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+````
+
+Install AssetTracker from our Flatpak repo (hosted via GitHub Pages):
+
+```bash
+flatpak install --user --from https://mackenzie779.github.io/asset-tracker/AssetTracker.flatpakref
+```
+
+Run:
+
+```bash
+flatpak run com.github.mackenzie779.assettracker
+```
+
+Update later:
+
+```bash
+flatpak update
+```
+
+Uninstall:
+
+```bash
+flatpak uninstall com.github.mackenzie779.assettracker
 ```

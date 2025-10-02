@@ -2595,13 +2595,26 @@ async fn is_database_open(state: State<'_, AppState>) -> Result<bool, String> {
 
 /* ---------- App setup ---------- */
 #[tauri::command]
-fn system_theme() -> String {
-    match dark_light::detect() {
-        dark_light::Mode::Dark => "dark".into(),
-        dark_light::Mode::Light => "light".into(),
-        dark_light::Mode::Default => "light".into(),
+async fn system_prefers_dark() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use ashpd::desktop::settings::{Settings, ColorScheme};
+
+        if let Ok(proxy) = Settings::new().await {
+            // typed read → Result<ColorScheme, _>
+            if let Ok(scheme) = proxy
+                .read::<ColorScheme>("org.freedesktop.appearance", "color-scheme")
+                .await
+            {
+                return matches!(scheme, ColorScheme::PreferDark);
+            }
+        }
     }
+    false
 }
+
+
+
 
 
 pub fn run() {
@@ -2651,7 +2664,7 @@ pub fn run() {
             export_reimbursable_report_pdf,
             list_transactions_all,
             is_database_open,
-            system_theme
+            system_prefers_dark
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

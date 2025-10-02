@@ -2,30 +2,30 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-
 import { invoke } from '@tauri-apps/api/core';
 
-async function applySystemTheme() {
+// main.tsx (or earliest bootstrap)
+// 1) opt-in browser UI to both schemes (scrollbars/forms)
+const meta = document.createElement('meta');
+meta.name = 'color-scheme';
+meta.content = 'light dark';
+document.head.appendChild(meta);
+
+// 2) ask Tauri which scheme the portal wants
+
+(async () => {
   try {
-    const theme = await invoke<string>('system_theme'); // your Rust command
-    document.documentElement.classList.toggle('dark', theme === 'dark');
-
-    // also follow live OS changes
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', (e) => {
-      document.documentElement.classList.toggle('dark', e.matches);
-    });
+    const dark = await invoke<boolean>('system_prefers_dark');
+    document.documentElement.classList.toggle('dark', dark);
   } catch {}
-}
+})();
 
-// If your bundler supports top-level await (Vite does):
-applySystemTheme().finally(() => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  )
-})
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
 
 
 

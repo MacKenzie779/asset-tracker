@@ -1,4 +1,4 @@
-name: linux-release
+name: release-linux-appimage
 
 on:
   push:

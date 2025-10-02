@@ -1,4 +1,4 @@
-name: windows-release
+name: release-windows
 
 on:
   push:

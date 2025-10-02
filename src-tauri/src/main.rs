@@ -1660,12 +1660,14 @@ async fn compute_reimbursable_slice(
     }
 
     // Slice AFTER that index (these are candidates), keep order oldest → newest
-    let slice_oldest_first: Vec<TransactionOut> =
-        if (last_non_neg_idx as usize) + 1 <= oldest_first.len() {
-            oldest_first[(last_non_neg_idx as usize + 1)..].to_vec()
-        } else {
-            Vec::new()
-        };
+// Slice AFTER that index (these are candidates), keep order oldest → newest
+let start_idx: usize = ((last_non_neg_idx + 1).max(0)) as usize;
+let slice_oldest_first: Vec<TransactionOut> = if start_idx < oldest_first.len() {
+    oldest_first[start_idx..].to_vec()
+} else {
+    Vec::new()
+};
+
 
     Ok((
         acc_name,
@@ -1689,7 +1691,7 @@ async fn export_reimbursable_report_xlsx(
     let acc_id = filters
         .account_id
         .ok_or("Filter to a reimbursable account first")?;
-    let (account_label, _current_balance, mut carry_at_cut, items_oldest) =
+    let (account_label, _current_balance, carry_at_cut, items_oldest) =
         compute_reimbursable_slice(&pool, acc_id).await?;
 
     // Columns (stable order)
@@ -1714,45 +1716,85 @@ async fn export_reimbursable_report_xlsx(
     let order = ["date", "account", "category", "description", "amount"];
     cols.sort_by_key(|k| order.iter().position(|x| x == &k.as_str()).unwrap_or(999));
 
-    // Build adjusted rows (keep order oldest→newest, apply carry & mark partials)
-    struct RowRef<'a> {
-        it: &'a TransactionOut,
-        adj_amount: f64,
-        partial_note: Option<String>,
-    }
-    let mut rows: Vec<RowRef<'_>> = Vec::new();
+// Build adjusted rows (oldest-first matching; supports partials)
+use std::collections::VecDeque;
 
-    for it in &items_oldest {
-        if it.amount < 0.0 {
-            if carry_at_cut > 0.0 {
-                let can_apply = carry_at_cut.min((-it.amount).max(0.0));
-                let adj = it.amount + can_apply; // closer to 0 (less negative)
-                carry_at_cut -= can_apply;
-                if adj.abs() < 1e-9 {
-                    continue; // fully covered
-                } else {
-                    let note = format!(
-                        "(partial: {} € of {} €)",
-                        format_amount_eu((-adj).max(0.0)),
-                        format_amount_eu(-it.amount)
-                    );
-                    rows.push(RowRef {
-                        it,
-                        adj_amount: adj,
-                        partial_note: Some(note),
-                    });
+struct RowRef<'a> {
+    it: &'a TransactionOut,
+    adj_amount: f64,
+    partial_note: Option<String>,
+}
+
+struct Open<'a> {
+    it: &'a TransactionOut,
+    // positive numbers: amount still outstanding for this expense
+    remaining: f64,
+    original: f64,
+}
+
+let mut open: VecDeque<Open<'_>> = VecDeque::new();
+
+// reimbursements that occurred before the slice (if any)
+let mut pre = carry_at_cut.max(0.0);
+
+for it in &items_oldest {
+    if it.amount < 0.0 {
+        // expense
+        let mut rem = (-it.amount).max(0.0);
+
+        // apply pre-slice carry to earliest expenses
+        if pre > 0.0 {
+            let apply = pre.min(rem);
+            rem -= apply;
+            pre -= apply;
+        }
+
+        if rem > 1e-9 {
+            open.push_back(Open {
+                it,
+                remaining: rem,
+                original: (-it.amount).max(0.0),
+            });
+        }
+    } else if it.amount > 0.0 {
+        // reimbursement (+) cancels oldest open expense first
+        let mut payoff = it.amount;
+        while payoff > 1e-9 {
+            if let Some(front) = open.front_mut() {
+                let apply = payoff.min(front.remaining);
+                front.remaining -= apply;
+                payoff -= apply;
+                if front.remaining <= 1e-9 {
+                    open.pop_front(); // fully covered
                 }
             } else {
-                rows.push(RowRef {
-                    it,
-                    adj_amount: it.amount,
-                    partial_note: None,
-                });
+                // no open expenses -> becomes future carry for later rows
+                pre += payoff;
+                break;
             }
-        } else if it.amount > 0.0 {
-            carry_at_cut += it.amount; // reimbursements after the cut reduce later expenses
         }
     }
+}
+
+// Now turn remaining open items into rows (oldest → newest)
+let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
+for o in open.iter() {
+    let adj = -o.remaining; // negative value to write
+    let partial_note = if (o.remaining + 1e-9) < o.original {
+        Some(format!(
+            "(partial: {} € of {} €)",
+            format_amount_eu(o.remaining),
+            format_amount_eu(o.original)
+        ))
+    } else {
+        None
+    };
+    rows.push(RowRef {
+        it: o.it,
+        adj_amount: adj,
+        partial_note,
+    });
+}
 
     // Period from included rows
     let (period_from, period_to) = if rows.is_empty() {
@@ -2003,7 +2045,7 @@ async fn export_reimbursable_report_pdf(
     let acc_id = filters
         .account_id
         .ok_or("Filter to a reimbursable account first")?;
-    let (account_label, _current_balance, mut carry_at_cut, items_oldest) =
+    let (account_label, _current_balance, carry_at_cut, items_oldest) =
         compute_reimbursable_slice(&pool, acc_id).await?;
 
     // Columns
@@ -2017,52 +2059,75 @@ async fn export_reimbursable_report_pdf(
         ]
     });
 
-    // Build adjusted rows (same logic as XLSX)
-    struct RowRef<'a> {
-        it: &'a TransactionOut,
-        adj_amount: f64,
-        desc: String,
-    }
-    let mut rows: Vec<RowRef<'_>> = Vec::new();
+// Build adjusted rows (oldest-first matching; supports partials)
+use std::collections::VecDeque;
 
-    for it in &items_oldest {
-        if it.amount < 0.0 {
-            if carry_at_cut > 0.0 {
-                let can_apply = carry_at_cut.min((-it.amount).max(0.0));
-                let adj = it.amount + can_apply;
-                carry_at_cut -= can_apply;
-                if adj.abs() < 1e-9 {
-                    continue;
-                } else {
-                    let base = it.description.as_deref().unwrap_or("").to_string();
-                    let note = format!(
-                        "(partial: {} € of {} €)",
-                        format_amount_eu((-adj).max(0.0)),
-                        format_amount_eu(-it.amount)
-                    );
-                    let desc = if base.is_empty() {
-                        note
-                    } else {
-                        format!("{base} {note}")
-                    };
-                    rows.push(RowRef {
-                        it,
-                        adj_amount: adj,
-                        desc,
-                    });
+struct RowRef<'a> {
+    it: &'a TransactionOut,
+    adj_amount: f64,
+    desc: String,
+}
+
+struct Open<'a> {
+    it: &'a TransactionOut,
+    remaining: f64, // positive outstanding
+    original: f64,  // positive original size
+}
+
+let mut open: VecDeque<Open<'_>> = VecDeque::new();
+let mut pre = carry_at_cut.max(0.0);
+
+for it in &items_oldest {
+    if it.amount < 0.0 {
+        let mut rem = (-it.amount).max(0.0);
+        if pre > 0.0 {
+            let apply = pre.min(rem);
+            rem -= apply;
+            pre -= apply;
+        }
+        if rem > 1e-9 {
+            open.push_back(Open {
+                it,
+                remaining: rem,
+                original: (-it.amount).max(0.0),
+            });
+        }
+    } else if it.amount > 0.0 {
+        let mut payoff = it.amount;
+        while payoff > 1e-9 {
+            if let Some(front) = open.front_mut() {
+                let apply = payoff.min(front.remaining);
+                front.remaining -= apply;
+                payoff -= apply;
+                if front.remaining <= 1e-9 {
+                    open.pop_front();
                 }
             } else {
-                let desc = it.description.as_deref().unwrap_or("").to_string();
-                rows.push(RowRef {
-                    it,
-                    adj_amount: it.amount,
-                    desc,
-                });
+                pre += payoff;
+                break;
             }
-        } else if it.amount > 0.0 {
-            carry_at_cut += it.amount;
         }
     }
+}
+
+// Produce rows (oldest → newest), appending "(partial: x € of y €)" when needed
+let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
+for o in open.iter() {
+    let mut desc = o.it.description.as_deref().unwrap_or("").to_string();
+    if (o.remaining + 1e-9) < o.original {
+        let note = format!(
+            "(partial: {} € of {} €)",
+            format_amount_eu(o.remaining),
+            format_amount_eu(o.original)
+        );
+        desc = if desc.is_empty() { note } else { format!("{desc} {note}") };
+    }
+    rows.push(RowRef {
+        it: o.it,
+        adj_amount: -o.remaining,
+        desc,
+    });
+}
 
     // Period
     let (period_from, period_to) = if rows.is_empty() {

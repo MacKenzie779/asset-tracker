@@ -24,6 +24,7 @@ printpdf = "0.5"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
+futures-util = "0.3"
 
 
 [profile.release]

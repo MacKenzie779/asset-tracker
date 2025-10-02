@@ -2613,10 +2613,6 @@ async fn system_prefers_dark() -> bool {
     false
 }
 
-
-
-
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2633,6 +2629,34 @@ pub fn run() {
                     .await
             })
             .map_err(|e| e.to_string())?;
+
+            use ashpd::desktop::settings::{
+            Settings, ColorScheme, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY,
+            };
+            use futures_util::StreamExt;
+            use tauri::Emitter; // ← brings `.emit(...)` into scope
+
+            let app_handle = app.handle().clone();
+
+            tauri::async_runtime::spawn(async move {
+            let Ok(proxy) = Settings::new().await else { return };
+            let Ok(mut stream) = proxy.receive_setting_changed().await else { return };
+
+            while let Some(change) = stream.next().await {
+                // `change` is a `Setting`
+                if change.namespace() == APPEARANCE_NAMESPACE && change.key() == COLOR_SCHEME_KEY {
+                // read typed value
+                if let Ok(scheme) = proxy
+                    .read::<ColorScheme>(APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY)
+                    .await
+                {
+                    let dark = matches!(scheme, ColorScheme::PreferDark);
+                    // send to all windows
+                    let _ = app_handle.emit("theme-updated", dark);
+                }
+                }
+            }
+            });
 
             app.manage(AppState {
                 pool: Arc::new(RwLock::new(pool)),

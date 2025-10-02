@@ -8,12 +8,9 @@ on:
 
 jobs:
   build-flatpak:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-
-    env:
-      CARGO_TARGET_DIR: target
 
     steps:
       - uses: actions/checkout@v4
@@ -24,58 +21,43 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      
-      - name: Install system deps for Tauri (deb build)
-        run: |
-            sudo apt-get update
-            sudo apt-get install -y \
-            libwebkit2gtk-4.0-dev libgtk-3-dev libsoup2.4-dev \
-            libayatana-appindicator3-dev librsvg2-dev \
-            pkg-config build-essential curl file patchelf libarchive-tools
-
-      - name: Install dependencies & build frontend
+      # Build frontend on host (we'll embed these assets when cargo builds inside Flatpak)
+      - name: Install deps & build frontend
         run: |
           npm ci
           npm run build
 
-      - name: Build .deb with Tauri
-        env:
-            CARGO_TARGET_DIR: ${{ github.workspace }}/target
-        run: |
-          npm run tauri:build -- --bundles deb -v
-
-      - name: Locate .deb
-        id: find_deb
-        run: |
-          DEB=$(ls target/release/bundle/deb/*amd64.deb)
-          echo "deb_path=$DEB" >> "$GITHUB_OUTPUT"
-          echo "Found: $DEB"
-
       - name: Install Flatpak & Builder
         run: |
-            sudo apt-get install -y flatpak flatpak-builder
-            flatpak --version
-            # add Flathub for the *user* (no sudo)
-            flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-            # install GNOME runtime/SDK for the *user*
-            flatpak --user install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder libarchive-tools
+          flatpak --version
 
-      - name: Prepare Flatpak build dir
+      # Use user remotes/runtimes to avoid system permission errors
+      - name: Add Flathub & install runtimes/SDK
         run: |
-          mkdir -p flatpak
-          cp "${{ steps.find_deb.outputs.deb_path }}" flatpak/assettracker.deb
+          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
+          # Rust toolchain extension (try current, fall back to previous)
+          flatpak --user install -y flathub org.freedesktop.Sdk.Extension.rust-stable//24.08 || \
+          flatpak --user install -y flathub org.freedesktop.Sdk.Extension.rust-stable//23.08
 
-      - name: Build Flatpak repo
+      - name: Build Flatpak repo (compile inside SDK)
         run: |
-          flatpak-builder --force-clean --repo=flatpak-repo flatpak-build-dir flatpak/com.github.mackenzie779.assettracker.yml
+          flatpak-builder --user --force-clean \
+            --repo=flatpak-repo flatpak-build-dir \
+            flatpak/com.github.mackenzie779.assettracker.yml
 
-      - name: Create single-file .flatpak bundle
+      - name: Inspect Flatpak refs (debug)
+        run: |
+          ostree refs --repo=flatpak-repo
+
+      - name: Create single-file .flatpak
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          flatpak build-bundle flatpak-repo AssetTracker_${VER}_x86_64.flatpak com.github.mackenzie779.assettracker \
+          APP_ID="com.github.mackenzie779.assettracker"
+          flatpak build-bundle flatpak-repo "AssetTracker_${VER}_x86_64.flatpak" "$APP_ID" \
+            --arch=x86_64 \
             --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
           ls -lh AssetTracker_*_x86_64.flatpak
 

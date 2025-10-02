@@ -1,10 +1,9 @@
 app-id: com.github.mackenzie779.assettracker
 runtime: org.gnome.Platform
-runtime-version: '47'        # or '46' if you prefer that runtime
+runtime-version: '47'
 sdk: org.gnome.Sdk
-command: assettracker
-
-# Permissions your Tauri app typically needs
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
 finish-args:
   - --share=network
   - --socket=x11
@@ -13,32 +12,29 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.portal.*
   - --filesystem=home
-  # If you use the Single Instance plugin:
-  # - --own-name=org.de_mackenzie_AssetTracker.SingleInstance
+command: assettracker
 
-
+# We’ll compile the Rust binary inside the SDK and install it + desktop/icon.
 modules:
   - name: assettracker
     buildsystem: simple
     sources:
-      - type: file
-        path: assettracker.deb    # we copy the built .deb here in CI
+      - type: dir
+        path: ..   # repo root (manifest lives in ./flatpak/)
     build-commands:
-      - bsdtar --to-stdout -xf assettracker.deb data.* | bsdtar -x -C /app -f -
-      - install -d /app/bin && ln -sf /app/usr/bin/asset-tracker /app/bin/assettracker
-      # rename whatever we find to match app-id and icon expectations
-      - |
-        df=$(ls /app/usr/share/applications/*.desktop | head -n1)
-        install -D "$df" "/app/usr/share/applications/com.github.mackenzie779.assettracker.desktop"
-      - |
-        for size in 16 24 32 48 64 128 256 512; do
-          d="/app/usr/share/icons/hicolor/${size}x${size}/apps"
-          if ls "$d"/*.png >/dev/null 2>&1; then
-            for f in "$d"/*.png; do
-              install -D "$f" "$d/com.github.mackenzie779.assettracker.png"
-            done
-          fi
-        done
+      # Build the frontend OUTSIDE CI is fine; if you want inside, add node ext.
+      # Here we assume "dist/" already exists from your CI step.
+      - bash -lc 'cd src-tauri && cargo build --release --locked'
+      - install -Dm755 src-tauri/target/release/assettracker /app/usr/bin/assettracker
+
+      # Desktop entry (commit this file; see below)
+      - install -Dm644 flatpak/com.github.mackenzie779.assettracker.desktop \
+          /app/usr/share/applications/com.github.mackenzie779.assettracker.desktop
+
+      # Icons (ensure you have at least these two files in your repo)
+      - install -Dm644 src-tauri/icons/128x128.png /app/usr/share/icons/hicolor/128x128/apps/com.github.mackenzie779.assettracker.png
+      - install -Dm644 src-tauri/icons/512x512.png /app/usr/share/icons/hicolor/512x512/apps/com.github.mackenzie779.assettracker.png
+
     cleanup:
       - /usr/share/doc
       - /usr/share/man

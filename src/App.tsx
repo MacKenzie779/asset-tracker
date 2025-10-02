@@ -11,10 +11,8 @@ import Transactions from './pages/Transactions';
 import Stats from './pages/Stats';
 import Categories from './pages/Categories';
 import Login from './pages/Login';
+
 const appWindow = getCurrentWebviewWindow()
-
-
-
 
 function Guard({ children }: { children: JSX.Element }) {
   const [ok, setOk] = useState<boolean | null>(null);

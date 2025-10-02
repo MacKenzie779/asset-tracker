@@ -23,6 +23,8 @@ rust_xlsxwriter = "0.69"
 printpdf = "0.5"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+dark-light = "1"
+
 
 [profile.release]
 lto = true

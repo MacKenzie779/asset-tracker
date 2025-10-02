@@ -2594,6 +2594,15 @@ async fn is_database_open(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 /* ---------- App setup ---------- */
+#[tauri::command]
+fn system_theme() -> String {
+    match dark_light::detect() {
+        dark_light::Mode::Dark => "dark".into(),
+        dark_light::Mode::Light => "light".into(),
+        dark_light::Mode::Default => "light".into(),
+    }
+}
+
 
 pub fn run() {
     tauri::Builder::default()
@@ -2641,7 +2650,8 @@ pub fn run() {
             export_reimbursable_report_xlsx,
             export_reimbursable_report_pdf,
             list_transactions_all,
-            is_database_open
+            is_database_open,
+            system_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

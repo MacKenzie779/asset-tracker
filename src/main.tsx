@@ -19,11 +19,13 @@ async function applySystemTheme() {
 }
 
 // If your bundler supports top-level await (Vite does):
-await applySystemTheme();
+applySystemTheme().finally(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  )
+})
 
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
+

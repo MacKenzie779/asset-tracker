@@ -218,10 +218,19 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Pages artifact (OSTree repo)
+      - name: Prepare Pages content (repo + flatpakref)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public
+          cp -a repo/. public/                # put OSTree at site root
+          cp AssetTracker.flatpakref public/  # publish the .flatpakref too
+
+      - name: Upload Pages artifact public/
         uses: actions/upload-pages-artifact@v3
         with:
-          path: repo
+          path: public
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4

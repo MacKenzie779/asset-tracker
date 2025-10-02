@@ -4,6 +4,7 @@ import App from './App';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+
 // meta: let forms/scrollbars follow theme
 const meta = document.createElement('meta');
 meta.name = 'color-scheme';

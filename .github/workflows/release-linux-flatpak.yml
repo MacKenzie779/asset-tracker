@@ -1,4 +1,4 @@
-name: linux-flatpak
+name: release-linux-flatpak
 
 on:
   push:

@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=AssetTracker
-Comment=Local-first expense tracker
-Exec=assettracker
-Icon=com.github.mackenzie779.assettracker
-Categories=Office;Finance;
-StartupNotify=true

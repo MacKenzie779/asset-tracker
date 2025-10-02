@@ -1,4 +1,4 @@
-name: release-linux-flatpak
+name: linux-flatpak
 
 on:
   push:
@@ -6,26 +6,30 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Semver to build (e.g., 1.0.1). Leave empty to use latest tag."
+        description: "Semver to build (e.g., 1.0.2). Leave empty to use latest tag."
         required: false
         type: string
 
 jobs:
   flatpak:
     runs-on: ubuntu-24.04
+    environment: github-pages
     permissions:
       contents: write
+      pages: write
+      id-token: write
 
     env:
       APP_ID: com.github.mackenzie779.assettracker
       RUNTIME: org.gnome.Platform
       SDK: org.gnome.Sdk
-      RUNTIME_BRANCH: "47"   # bump when GNOME runtime updates
+      RUNTIME_BRANCH: "47"  # bump when GNOME runtime updates
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -36,23 +40,17 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Build deps for Tauri v2 + Flatpak tooling
-      - name: Install Linux deps
+      - name: Install build deps (Tauri v2 + Flatpak)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            patchelf \
-            flatpak flatpak-builder
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev patchelf \
+            flatpak flatpak-builder ostree gpg
 
       - name: Install frontend deps
         run: npm ci
 
-      # Determine version (tag / manual input / latest tag / fallback)
       - name: Compute APP_VERSION
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -76,7 +74,6 @@ jobs:
       - name: Set package.json version
         run: npm version --no-git-tag-version "${APP_VERSION}"
 
-      # Build the .deb we’ll wrap as Flatpak
       - name: Build Debian package with Tauri
         run: npx @tauri-apps/cli@^2 build --bundles deb -v
 
@@ -86,10 +83,13 @@ jobs:
         run: |
           set -euo pipefail
           d="$(ls -1 src-tauri/target/release/bundle/deb/*_"${APP_VERSION}"_*amd64.deb | head -n1)"
+          if [[ -z "${d}" ]]; then
+            echo "No .deb found" >&2
+            exit 1
+          fi
           echo "deb=${d}" >> "$GITHUB_OUTPUT"
           echo "Found: ${d}"
 
-      # Inspect the .deb to auto-detect desktop/icon/bin names
       - name: Inspect .deb for names
         id: inspect_deb
         shell: bash
@@ -100,30 +100,22 @@ jobs:
           cd "${workdir}"
           ar x pkg.deb
           mkdir data && tar -xf data.tar.* -C data
-
           desktop="$(basename "$(find data/usr/share/applications -maxdepth 1 -name '*.desktop' | head -n1 || true)")"
           iconfile="$(basename "$(find data/usr/share/icons -path '*/apps/*' \( -name '*.png' -o -name '*.svg' \) | head -n1 || true)")"
           iconbase="${iconfile%.*}"
           binname="$(basename "$(find data/usr/bin -maxdepth 1 -type f | head -n1 || true)")"
-
           [[ -z "${desktop}" ]] && desktop="AssetTracker.desktop"
           [[ -z "${iconbase}" ]] && iconbase="AssetTracker"
           [[ -z "${binname}"  ]] && binname="AssetTracker"
-
           echo "desktop=${desktop}"   >> "$GITHUB_OUTPUT"
           echo "iconbase=${iconbase}" >> "$GITHUB_OUTPUT"
           echo "binname=${binname}"   >> "$GITHUB_OUTPUT"
 
-          echo "Desktop: ${desktop}"
-          echo "Icon:    ${iconbase}"
-          echo "Binary:  ${binname}"
-
-      # Write the Flatpak manifest (wraps the .deb) — NOTE the quoted runtime-version
-      - name: Write Flatpak manifest
+      - name: Write Flatpak manifest (wraps the .deb)
         shell: bash
         run: |
           set -euo pipefail
-          cat > ${APP_ID}.yml <<'YAML'
+          cat > "${APP_ID}.yml" <<'YAML'
           app-id: ${APP_ID}
           runtime: ${RUNTIME}
           runtime-version: "${RUNTIME_BRANCH}"
@@ -154,48 +146,93 @@ jobs:
                 - type: file
                   path: ${DEB_PATH}
           YAML
-          sed -i "s|\${APP_ID}|${APP_ID}|g" ${APP_ID}.yml
-          sed -i "s|\${RUNTIME}|${RUNTIME}|g" ${APP_ID}.yml
-          sed -i "s|\${RUNTIME_BRANCH}|${RUNTIME_BRANCH}|g" ${APP_ID}.yml
-          sed -i "s|\${SDK}|${SDK}|g" ${APP_ID}.yml
-          sed -i "s|\${DEB_PATH}|${{ steps.find_deb.outputs.deb }}|g" ${APP_ID}.yml
-          sed -i "s|\${DESKTOP_FILE}|${{ steps.inspect_deb.outputs.desktop }}|g" ${APP_ID}.yml
-          sed -i "s|\${ICON_BASE}|${{ steps.inspect_deb.outputs.iconbase }}|g" ${APP_ID}.yml
-          sed -i "s|\${BIN_NAME}|${{ steps.inspect_deb.outputs.binname }}|g" ${APP_ID}.yml
+          sed -i "s|\${APP_ID}|${APP_ID}|g" "${APP_ID}.yml"
+          sed -i "s|\${RUNTIME}|${RUNTIME}|g" "${APP_ID}.yml"
+          sed -i "s|\${RUNTIME_BRANCH}|${RUNTIME_BRANCH}|g" "${APP_ID}.yml"
+          sed -i "s|\${SDK}|${SDK}|g" "${APP_ID}.yml"
+          sed -i "s|\${DEB_PATH}|${{ steps.find_deb.outputs.deb }}|g" "${APP_ID}.yml"
+          sed -i "s|\${DESKTOP_FILE}|${{ steps.inspect_deb.outputs.desktop }}|g" "${APP_ID}.yml"
+          sed -i "s|\${ICON_BASE}|${{ steps.inspect_deb.outputs.iconbase }}|g" "${APP_ID}.yml"
+          sed -i "s|\${BIN_NAME}|${{ steps.inspect_deb.outputs.binname }}|g" "${APP_ID}.yml"
           echo "=== Manifest ==="
-          cat ${APP_ID}.yml
+          cat "${APP_ID}.yml"
 
-      # Prepare Flatpak (USER installation — no sudo)
       - name: Configure Flathub remote (user)
         run: flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: Install Flatpak runtimes (user)
         run: |
-          flatpak --user install -y --noninteractive flathub ${SDK}//${RUNTIME_BRANCH}
-          flatpak --user install -y --noninteractive flathub ${RUNTIME}//${RUNTIME_BRANCH}
-          flatpak --user remotes --show-details
+          flatpak --user install -y --noninteractive flathub "${SDK}//${RUNTIME_BRANCH}"
+          flatpak --user install -y --noninteractive flathub "${RUNTIME}//${RUNTIME_BRANCH}"
 
-      # Build repo + bundle (user installation)
-      - name: Build Flatpak
+      - name: Build Flatpak repo (unsigned)
         shell: bash
         run: |
           set -euo pipefail
           rm -rf build-dir repo
-          flatpak-builder --user --force-clean --install-deps-from=flathub --repo=repo build-dir ${APP_ID}.yml
-          flatpak build-bundle repo AssetTracker-${APP_VERSION}-x86_64.flatpak ${APP_ID} stable
+          flatpak-builder --user --force-clean --install-deps-from=flathub --repo=repo build-dir "${APP_ID}.yml"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Import GPG key & sign repo
+        if: env.APP_VERSION != '0.0.0-dev'
+        env:
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$(mktemp -d)"
+          if [[ -n "${FLATPAK_GPG_PRIVATE_KEY}" ]]; then
+            printf '%s\n' "${FLATPAK_GPG_PRIVATE_KEY}" | gpg --batch --yes --import
+            KEYID="$(gpg --batch --list-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+            flatpak build-update-repo --generate-static-deltas --gpg-sign="${KEYID}" --gpg-homedir="${GNUPGHOME}" repo
+            gpg --batch --yes --armor --export "${KEYID}" > repo/flatpak.gpg
+            base64 -w0 repo/flatpak.gpg > repo/flatpak.gpg.b64
+            echo "KEYID=${KEYID}" >> "$GITHUB_ENV"
+          else
+            flatpak build-update-repo --generate-static-deltas repo
+          fi
+
+      - name: Create .flatpakref pointing to GitHub Pages repo
+        id: flatpakref
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          REPO_URL="https://${OWNER}.github.io/${REPO}/repo/"
+          GPG_B64="$(cat repo/flatpak.gpg.b64 2>/dev/null || true)"
+          {
+            echo "[Flatpak Ref]"
+            echo "Title=AssetTracker"
+            echo "Name=${APP_ID}"
+            echo "Branch=stable"
+            echo "Url=${REPO_URL}"
+            echo "RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo"
+            if [[ -n "${GPG_B64}" ]]; then
+              echo "GPGKey=${GPG_B64}"
+            fi
+          } > AssetTracker.flatpakref
+          echo "repo_url=${REPO_URL}" >> "$GITHUB_OUTPUT"
+          echo "Wrote AssetTracker.flatpakref with Url=${REPO_URL}"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact (OSTree repo)
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: linux-flatpak
-          path: AssetTracker-${APP_VERSION}-x86_64.flatpak
+          path: repo
 
-      - name: Publish GitHub Release (attach .flatpak)
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+
+      - name: Publish .flatpakref to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: AssetTracker v${{ env.APP_VERSION }}
           draft: false
           prerelease: false
-          files: |
-            AssetTracker-${{ env.APP_VERSION }}-x86_64.flatpak
+          files: AssetTracker.flatpakref
+
+        

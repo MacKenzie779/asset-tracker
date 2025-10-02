@@ -38,8 +38,7 @@
         "width": 1100,
         "height": 720,
         "resizable": true,
-        "useHttpsScheme": true,
-        "decorations": false
+        "useHttpsScheme": true
       }
     ],
     "security": {

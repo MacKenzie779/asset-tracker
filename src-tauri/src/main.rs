@@ -2618,6 +2618,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // --- your DB init (unchanged) ---
             let pool = tauri::async_runtime::block_on(async move {
                 let opts = SqliteConnectOptions::new()
                     .filename(":memory:")
@@ -2629,72 +2630,77 @@ pub fn run() {
                     .await
             })
             .map_err(|e| e.to_string())?;
+
+            // --- toggle decorations on tiling WMs (Linux) ---
             #[cfg(target_os = "linux")]
             {
-                use ashpd::desktop::settings::{
-                Settings, ColorScheme, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY,
+                use std::env;
+                use tauri::Manager; // for get_webview_window / set_decorations
+
+                // heuristic + manual override via ASSETTRACKER_TILING=0/1/true/false
+                let is_tiling = {
+                    let desktop = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
+                    let session = env::var("DESKTOP_SESSION").unwrap_or_default().to_lowercase();
+                    let wm_name = env::var("XDG_SESSION_DESKTOP").unwrap_or_default().to_lowercase();
+
+                    const TILERS: &[&str] = &[
+                        "i3","sway","hypr","hyprland","bspwm","awesome",
+                        "qtile","xmonad","river","leftwm","dwm","spectrwm","berry"
+                    ];
+                    let auto = TILERS.iter().any(|t|
+                        desktop.contains(t) || session.contains(t) || wm_name.contains(t)
+                    );
+
+                    match env::var("ASSETTRACKER_TILING").ok().as_deref() {
+                        Some("1") | Some("true") | Some("yes") => true,
+                        Some("0") | Some("false") | Some("no")  => false,
+                        _ => auto,
+                    }
                 };
+
+                if let Some(win) = app.get_webview_window("main") {
+                    // Keep native bar by default; hide it on tiling WMs
+                    let _ = win.set_decorations(!is_tiling);
+                }
+            }
+
+            // --- your Portal/appearance listener (unchanged) ---
+            #[cfg(target_os = "linux")]
+            {
+                use ashpd::desktop::settings::{Settings, ColorScheme, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY};
                 use futures_util::StreamExt;
-                use tauri::Emitter; // ← brings `.emit(...)` into scope
+                use tauri::Emitter;
 
                 let app_handle = app.handle().clone();
-
                 tauri::async_runtime::spawn(async move {
-                let Ok(proxy) = Settings::new().await else { return };
-                let Ok(mut stream) = proxy.receive_setting_changed().await else { return };
-
-                while let Some(change) = stream.next().await {
-                    // `change` is a `Setting`
-                    if change.namespace() == APPEARANCE_NAMESPACE && change.key() == COLOR_SCHEME_KEY {
-                    // read typed value
-                    if let Ok(scheme) = proxy
-                        .read::<ColorScheme>(APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY)
-                        .await
-                    {
-                        let dark = matches!(scheme, ColorScheme::PreferDark);
-                        // send to all windows
-                        let _ = app_handle.emit("theme-updated", dark);
+                    let Ok(proxy) = Settings::new().await else { return };
+                    let Ok(mut stream) = proxy.receive_setting_changed().await else { return };
+                    while let Some(change) = stream.next().await {
+                        if change.namespace() == APPEARANCE_NAMESPACE && change.key() == COLOR_SCHEME_KEY {
+                            if let Ok(scheme) = proxy.read::<ColorScheme>(APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY).await {
+                                let dark = matches!(scheme, ColorScheme::PreferDark);
+                                let _ = app_handle.emit("theme-updated", dark);
+                            }
+                        }
                     }
-                    }
-                }
                 });
             }
-            app.manage(AppState {
-                pool: Arc::new(RwLock::new(pool)),
-            });
+
+            app.manage(AppState { pool: Arc::new(RwLock::new(pool)) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // NEW login commands
-            open_database,
-            create_database,
-            close_database,
-            // (keep your existing commands)
-            add_account,
-            list_accounts,
-            list_transactions,
-            add_transaction,
-            update_transaction,
-            delete_transaction,
-            delete_account,
-            update_account,
-            list_categories,
-            add_category,
-            update_category,
-            delete_category,
-            search_transactions,
-            export_transactions_xlsx,
-            export_transactions_pdf,
-            export_reimbursable_report_xlsx,
-            export_reimbursable_report_pdf,
-            list_transactions_all,
-            is_database_open,
-            system_prefers_dark
+            open_database, create_database, close_database,
+            add_account, list_accounts, list_transactions,
+            add_transaction, update_transaction, delete_transaction,
+            delete_account, update_account,
+            list_categories, add_category, update_category, delete_category,
+            search_transactions, export_transactions_xlsx, export_transactions_pdf,
+            export_reimbursable_report_xlsx, export_reimbursable_report_pdf,
+            list_transactions_all, is_database_open, system_prefers_dark
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-fn main() {
-    run();
-}
+fn main() { run(); }

@@ -31,7 +31,7 @@ modules:
       - type: dir
         path: ..
     build-commands:
-      - bash -lc 'cd src-tauri && cargo build --release --locked'
+      - bash -lc 'cd src-tauri && (cargo build --release --locked || (cargo generate-lockfile && cargo build --release))'
       - install -Dm755 src-tauri/target/release/assettracker /app/usr/bin/assettracker
       - install -Dm644 flatpak/com.github.mackenzie779.assettracker.desktop \
           /app/usr/share/applications/com.github.mackenzie779.assettracker.desktop

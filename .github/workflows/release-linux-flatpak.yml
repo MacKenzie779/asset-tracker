@@ -199,7 +199,7 @@ jobs:
           set -euo pipefail
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY#*/}"
-          REPO_URL="https://${OWNER}.github.io/${REPO}/repo/"
+          REPO_URL="https://${OWNER}.github.io/${REPO}/"
           GPG_B64="$(cat repo/flatpak.gpg.b64 2>/dev/null || true)"
           {
             echo "[Flatpak Ref]"

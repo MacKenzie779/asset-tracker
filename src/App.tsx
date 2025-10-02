@@ -1,8 +1,8 @@
 // src/App.tsx
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { appWindow } from "@tauri-apps/api/window";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import './index.css';
 import Layout from './components/Layout';
 import Home from './pages/Home';
@@ -11,6 +11,7 @@ import Transactions from './pages/Transactions';
 import Stats from './pages/Stats';
 import Categories from './pages/Categories';
 import Login from './pages/Login';
+const appWindow = getCurrentWebviewWindow()
 
 
 

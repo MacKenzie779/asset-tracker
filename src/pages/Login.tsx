@@ -1,8 +1,8 @@
 // src/pages/Login.tsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/tauri";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/api/dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import loginBg from "../assets/wallpaper/sajad.jpg"; 
 
 // Optional wallpaper (leave empty for gradient background)

@@ -54,20 +54,13 @@ jobs:
           $ver = $env:GITHUB_REF_NAME -replace '^v',''
           npm version --no-git-tag-version $ver
 
-      - name: Generate Tauri icons (if missing)
-        shell: pwsh
-        run: |
-          if (!(Test-Path 'src-tauri\icons\icon.ico')) {
-            npx --yes "@tauri-apps/cli@^1" icon "src-tauri/icons/app-icon.png"
-          }
-
       - name: Build frontend
         run: npm run build
 
       - name: Tauri build (NSIS)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}\target
-        run: npx tauri build --bundles nsis -v
+        run:  npx @tauri-apps/cli@^2 build --bundles nsis -v
 
       - name: Preview bundle dir (debug)
         if: always()

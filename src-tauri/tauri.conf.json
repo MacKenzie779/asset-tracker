@@ -1,63 +1,49 @@
 {
-  "package": {
-    "productName": "AssetTracker",
-    "version": "../package.json"
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173"
   },
-  "tauri": {
-    "macOSPrivateApi": false,
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      },
-      "dialog": {
-        "ask": true,
-        "confirm": true,
-        "message": true,
-        "open": true,
-        "save": true
+  "bundle": {
+    "active": true,
+    "longDescription": "Track accounts and transactions locally with export and stats.",
+    "targets": [
+      "nsis",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
       }
     },
-    "security": {
-      "csp": "default-src 'self' 'unsafe-inline' tauri: asset: http://localhost:* https://localhost:*; img-src 'self' data: asset:; media-src 'self' data: asset:"
-    },
+    "category": "Finance",
+    "shortDescription": "Local-first expense tracker"
+  },
+  "productName": "AssetTracker",
+  "mainBinaryName": "AssetTracker",
+  "version": "../package.json",
+  "identifier": "com.github.mackenzie779.assettracker",
+  "plugins": {},
+  "app": {
+    "macOSPrivateApi": false,
     "windows": [
       {
         "title": "AssetTracker",
         "width": 1100,
         "height": 720,
-        "resizable": true
+        "resizable": true,
+        "useHttpsScheme": true,
+        "decorations": false
       }
     ],
-    "bundle": {
-      "active": true,
-      "identifier": "com.github.mackenzie779.assettracker",
-     
-      "targets": ["nsis", "appimage"],
-
-     
-      "icon": [
-        "icons/icon.ico",
-        "icons/icon.icns",
-        "icons/icon.png"
-      ],
-
-     
-      "windows": {
-        "webviewInstallMode": { "type": "downloadBootstrapper" }
-      },
-
-    
-      "category": "Finance",
-      "shortDescription": "Local-first expense tracker",
-      "longDescription": "Track accounts and transactions locally with export and stats."
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' tauri: asset: http://localhost:* https://localhost:*; img-src 'self' data: asset:; media-src 'self' data: asset:; connect-src ipc: http://ipc.localhost"
     }
-  },
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:5173",
-    "distDir": "../dist"
   }
 }

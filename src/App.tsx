@@ -23,6 +23,7 @@ function Guard({ children }: { children: JSX.Element }) {
     if (!unlocked) {
       setOk(false);
       nav("/login", { replace: true });
+      console.log('prefers dark?', window.matchMedia('(prefers-color-scheme: dark)').matches);
       return;
     }
     (async () => {

@@ -5,23 +5,21 @@ import App from './App'
 
 import { invoke } from '@tauri-apps/api/core';
 
-(async () => {
+async function applySystemTheme() {
   try {
-    // only apply if you’re using Tailwind `darkMode: 'class'`
-    // (for `darkMode: 'media'` this isn’t needed)
-    const theme = await invoke<string>('system_theme');
+    const theme = await invoke<string>('system_theme'); // your Rust command
     document.documentElement.classList.toggle('dark', theme === 'dark');
 
-    // keep following system changes too
+    // also follow live OS changes
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener('change', (e) => {
       document.documentElement.classList.toggle('dark', e.matches);
     });
   } catch {}
-})();
+}
 
-
-
+// If your bundler supports top-level await (Vite does):
+await applySystemTheme();
 
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

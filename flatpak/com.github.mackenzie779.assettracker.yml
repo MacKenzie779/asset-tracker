@@ -4,6 +4,15 @@ runtime-version: '47'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
+
+# 👇 Add this block
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network          # allow cargo to fetch crates
+  env:
+    CARGO_HOME: /run/build/assettracker/cargo-home
+
 finish-args:
   - --share=network
   - --socket=x11
@@ -12,29 +21,22 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.portal.*
   - --filesystem=home
+
 command: assettracker
 
-# We’ll compile the Rust binary inside the SDK and install it + desktop/icon.
 modules:
   - name: assettracker
     buildsystem: simple
     sources:
       - type: dir
-        path: ..   # repo root (manifest lives in ./flatpak/)
+        path: ..
     build-commands:
-      # Build the frontend OUTSIDE CI is fine; if you want inside, add node ext.
-      # Here we assume "dist/" already exists from your CI step.
       - bash -lc 'cd src-tauri && cargo build --release --locked'
       - install -Dm755 src-tauri/target/release/assettracker /app/usr/bin/assettracker
-
-      # Desktop entry (commit this file; see below)
       - install -Dm644 flatpak/com.github.mackenzie779.assettracker.desktop \
           /app/usr/share/applications/com.github.mackenzie779.assettracker.desktop
-
-      # Icons (ensure you have at least these two files in your repo)
       - install -Dm644 src-tauri/icons/128x128.png /app/usr/share/icons/hicolor/128x128/apps/com.github.mackenzie779.assettracker.png
       - install -Dm644 src-tauri/icons/512x512.png /app/usr/share/icons/hicolor/512x512/apps/com.github.mackenzie779.assettracker.png
-
     cleanup:
       - /usr/share/doc
       - /usr/share/man

@@ -118,7 +118,7 @@ jobs:
           echo "Icon:    ${iconbase}"
           echo "Binary:  ${binname}"
 
-      # Write the Flatpak manifest (wraps the .deb)
+      # Write the Flatpak manifest (wraps the .deb) — NOTE the quoted runtime-version
       - name: Write Flatpak manifest
         shell: bash
         run: |
@@ -126,7 +126,7 @@ jobs:
           cat > ${APP_ID}.yml <<'YAML'
           app-id: ${APP_ID}
           runtime: ${RUNTIME}
-          runtime-version: ${RUNTIME_BRANCH}
+          runtime-version: "${RUNTIME_BRANCH}"
           sdk: ${SDK}
           branch: stable
           command: ${BIN_NAME}
@@ -171,8 +171,8 @@ jobs:
 
       - name: Install Flatpak runtimes (user)
         run: |
-          flatpak --user install -y flathub ${SDK}//${RUNTIME_BRANCH}
-          flatpak --user install -y flathub ${RUNTIME}//${RUNTIME_BRANCH}
+          flatpak --user install -y --noninteractive flathub ${SDK}//${RUNTIME_BRANCH}
+          flatpak --user install -y --noninteractive flathub ${RUNTIME}//${RUNTIME_BRANCH}
           flatpak --user remotes --show-details
 
       # Build repo + bundle (user installation)

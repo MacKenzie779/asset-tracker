@@ -20,7 +20,7 @@ jobs:
       APP_ID: com.github.mackenzie779.assettracker
       RUNTIME: org.gnome.Platform
       SDK: org.gnome.Sdk
-      RUNTIME_BRANCH: "47" # update when GNOME runtime bumps
+      RUNTIME_BRANCH: "47"   # bump when GNOME runtime updates
 
     steps:
       - name: Checkout
@@ -36,7 +36,7 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Build deps for Tauri v2 on Ubuntu (for the .deb step)
+      # Build deps for Tauri v2 + Flatpak tooling
       - name: Install Linux deps
         run: |
           sudo apt-get update
@@ -52,7 +52,7 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      # Determine version from tag / manual input / latest tag / fallback
+      # Determine version (tag / manual input / latest tag / fallback)
       - name: Compute APP_VERSION
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -76,7 +76,7 @@ jobs:
       - name: Set package.json version
         run: npm version --no-git-tag-version "${APP_VERSION}"
 
-      # Build the .deb we’ll repackage as Flatpak
+      # Build the .deb we’ll wrap as Flatpak
       - name: Build Debian package with Tauri
         run: npx @tauri-apps/cli@^2 build --bundles deb -v
 
@@ -86,16 +86,11 @@ jobs:
         run: |
           set -euo pipefail
           d="$(ls -1 src-tauri/target/release/bundle/deb/*_"${APP_VERSION}"_*amd64.deb | head -n1)"
-          if [[ -z "${d}" ]]; then
-            echo "No .deb found for version ${APP_VERSION}" >&2
-            find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -printf '%p\n' || true
-            exit 1
-          fi
           echo "deb=${d}" >> "$GITHUB_OUTPUT"
           echo "Found: ${d}"
 
-      # Inspect the .deb to detect desktop/icon names for renaming
-      - name: Inspect .deb for desktop & icon names
+      # Inspect the .deb to auto-detect desktop/icon/bin names
+      - name: Inspect .deb for names
         id: inspect_deb
         shell: bash
         run: |
@@ -105,22 +100,25 @@ jobs:
           cd "${workdir}"
           ar x pkg.deb
           mkdir data && tar -xf data.tar.* -C data
-          # desktop file (first found)
+
           desktop="$(basename "$(find data/usr/share/applications -maxdepth 1 -name '*.desktop' | head -n1 || true)")"
-          # icon base name (strip extension; pick first png/svg under hicolor/apps)
           iconfile="$(basename "$(find data/usr/share/icons -path '*/apps/*' \( -name '*.png' -o -name '*.svg' \) | head -n1 || true)")"
           iconbase="${iconfile%.*}"
+          binname="$(basename "$(find data/usr/bin -maxdepth 1 -type f | head -n1 || true)")"
 
-          # Fallbacks if not found
-          if [[ -z "${desktop}" ]]; then desktop="AssetTracker.desktop"; fi
-          if [[ -z "${iconbase}" ]]; then iconbase="AssetTracker"; fi
+          [[ -z "${desktop}" ]] && desktop="AssetTracker.desktop"
+          [[ -z "${iconbase}" ]] && iconbase="AssetTracker"
+          [[ -z "${binname}"  ]] && binname="AssetTracker"
 
-          echo "desktop=${desktop}" >> "$GITHUB_OUTPUT"
+          echo "desktop=${desktop}"   >> "$GITHUB_OUTPUT"
           echo "iconbase=${iconbase}" >> "$GITHUB_OUTPUT"
-          echo "Desktop file: ${desktop}"
-          echo "Icon base:    ${iconbase}"
+          echo "binname=${binname}"   >> "$GITHUB_OUTPUT"
 
-      # Generate Flatpak manifest that wraps the .deb
+          echo "Desktop: ${desktop}"
+          echo "Icon:    ${iconbase}"
+          echo "Binary:  ${binname}"
+
+      # Write the Flatpak manifest (wraps the .deb)
       - name: Write Flatpak manifest
         shell: bash
         run: |
@@ -131,7 +129,7 @@ jobs:
           runtime-version: ${RUNTIME_BRANCH}
           sdk: ${SDK}
           branch: stable
-          command: AssetTracker
+          command: ${BIN_NAME}
           finish-args:
             - --share=network
             - --socket=wayland
@@ -156,7 +154,6 @@ jobs:
                 - type: file
                   path: ${DEB_PATH}
           YAML
-          # variable substitution
           sed -i "s|\${APP_ID}|${APP_ID}|g" ${APP_ID}.yml
           sed -i "s|\${RUNTIME}|${RUNTIME}|g" ${APP_ID}.yml
           sed -i "s|\${RUNTIME_BRANCH}|${RUNTIME_BRANCH}|g" ${APP_ID}.yml
@@ -164,23 +161,27 @@ jobs:
           sed -i "s|\${DEB_PATH}|${{ steps.find_deb.outputs.deb }}|g" ${APP_ID}.yml
           sed -i "s|\${DESKTOP_FILE}|${{ steps.inspect_deb.outputs.desktop }}|g" ${APP_ID}.yml
           sed -i "s|\${ICON_BASE}|${{ steps.inspect_deb.outputs.iconbase }}|g" ${APP_ID}.yml
+          sed -i "s|\${BIN_NAME}|${{ steps.inspect_deb.outputs.binname }}|g" ${APP_ID}.yml
           echo "=== Manifest ==="
           cat ${APP_ID}.yml
 
-      # Prepare Flatpak runtimes
-      - name: Install Flatpak runtimes
-        run: |
-          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak --version
-          flatpak install -y flathub ${SDK}//${RUNTIME_BRANCH} ${RUNTIME}//${RUNTIME_BRANCH}
+      # Prepare Flatpak (USER installation — no sudo)
+      - name: Configure Flathub remote (user)
+        run: flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-      # Build repo + bundle
+      - name: Install Flatpak runtimes (user)
+        run: |
+          flatpak --user install -y flathub ${SDK}//${RUNTIME_BRANCH}
+          flatpak --user install -y flathub ${RUNTIME}//${RUNTIME_BRANCH}
+          flatpak --user remotes --show-details
+
+      # Build repo + bundle (user installation)
       - name: Build Flatpak
         shell: bash
         run: |
           set -euo pipefail
           rm -rf build-dir repo
-          flatpak-builder --force-clean --repo=repo build-dir ${APP_ID}.yml
+          flatpak-builder --user --force-clean --install-deps-from=flathub --repo=repo build-dir ${APP_ID}.yml
           flatpak build-bundle repo AssetTracker-${APP_VERSION}-x86_64.flatpak ${APP_ID} stable
 
       - name: Upload artifact

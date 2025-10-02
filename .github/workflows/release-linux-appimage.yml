@@ -1,9 +1,14 @@
-name: release-linux-appimage
+name: linux-release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver to build (e.g., 1.0.1). Leave empty to use latest tag."
+        required: false
+        type: string
 
 jobs:
   linux-appimage:
@@ -14,8 +19,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # need tags
+        with: { fetch-depth: 0 }   # need tags/history
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -26,7 +30,7 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Tauri v2 system deps
+      # System deps for Tauri v2 (WebKitGTK 4.1 + Soup3)
       - name: Install Linux deps
         run: |
           sudo apt-get update
@@ -41,10 +45,32 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      # <-- Key step: drive Tauri version from the tag
-      - name: Set app version from tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+      # Determine version:
+      # - tag trigger: use tag (strip leading v)
+      # - manual trigger: use input, else latest tag, else 0.0.0-dev
+      - name: Compute APP_VERSION
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${INPUT_VERSION}" ]]; then
+            ver="${INPUT_VERSION}"
+          else
+            if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+              ver="$(git describe --tags --abbrev=0 | sed -E 's/^v//')"
+            else
+              ver="0.0.0-dev"
+            fi
+          fi
+          echo "APP_VERSION=$ver" >> "$GITHUB_ENV"
+          echo "Building version: $ver"
+
+      # Drive Tauri version from package.json (tauri.conf.json has "version": "../package.json")
+      - name: Set package.json version
+        run: npm version --no-git-tag-version "${APP_VERSION}"
 
       # Optional: generate icons if missing
       - name: Generate Tauri icons (if missing)
@@ -53,15 +79,19 @@ jobs:
             npx --yes @tauri-apps/cli@^2 icon src-tauri/icons/app-icon.png
           fi
 
+      # Build & publish AppImage
+      # IMPORTANT: disable linuxdeploy's gstreamer plugin to avoid bundling Qt libs
+      # that can cause "qt.qpa.plugin: Could not find the Qt platform plugin 'wayland'" crashes
       - name: Build & publish (AppImage)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLE_LINUX_DISABLE_GSTREAMER_PLUGIN: "true"
         with:
           tauriScript: npx @tauri-apps/cli@^2
           args: --bundles appimage
-          tagName: ${{ github.ref_name }}
-          releaseName: "AssetTracker ${{ github.ref_name }}"
+          tagName: v${{ env.APP_VERSION }}
+          releaseName: "AssetTracker v${{ env.APP_VERSION }}"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: false
           prerelease: false

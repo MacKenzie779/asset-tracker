@@ -23,7 +23,7 @@ jobs:
       APP_ID: com.github.mackenzie779.assettracker
       RUNTIME: org.gnome.Platform
       SDK: org.gnome.Sdk
-      RUNTIME_BRANCH: "47"  # bump when GNOME runtime updates
+      RUNTIME_BRANCH: "49"  # bump when GNOME runtime updates
 
     steps:
       - name: Checkout

@@ -14,7 +14,7 @@ import type { LayoutOutletContext } from '../components/Layout';
 import {
   ResponsiveContainer,
   PieChart, Pie, Cell, Tooltip as RTooltip, Legend as RLegend,
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Brush,
+  LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Brush,
 } from 'recharts';
 
 export default function Stats() {
@@ -23,12 +23,13 @@ export default function Stats() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txAll, setTxAll] = useState<TxMini[]>([]);
   const [loading, setLoading] = useState(true);
-  type TxForCat = { amount: number; category?: string | null };
-  const [txCatItems, setTxCatItems] = useState<TxForCat[]>([]);
+  type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null };
+  const [txCatItems, setTxCatItems] = useState<TxExt[]>([]);
 
   // controls
   const [groupBy, setGroupBy] = useState<'monthly' | 'yearly'>('monthly');
-  const [range, setRange] = useState<'12m' | '24m' | 'all'>('12m');
+  const [range, setRange] = useState<'6m' | '12m' | '24m' | '36m' | 'ytd' | 'all'>('12m');
+  const [showIndividualAccounts, setShowIndividualAccounts] = useState(false);
 
   // quick helper (month start/end)
   const today = new Date();
@@ -55,17 +56,23 @@ export default function Stats() {
     try {
       const pageSize = 1000;
       let offset = 0;
-      const all: TxForCat[] = [];
+      const all: TxExt[] = [];
       while (true) {
         const res = await searchTransactions({
-          tx_type: 'expense', // only expenses
+          tx_type: 'all', // fetch all to do both income and expenses
           limit: pageSize,
           offset,
           sort_by: 'id',
           sort_dir: 'asc',
         });
         const items = (res.items ?? []) as any[];
-        all.push(...items.map(it => ({ amount: it.amount, category: it.category })));
+        all.push(...items.map(it => ({ 
+          id: it.id, 
+          date: it.date, 
+          amount: it.amount, 
+          category: it.category,
+          description: it.description 
+        })));
         const total: number = (res as any).total ?? items.length;
         offset += pageSize;
         if (offset >= total) break;
@@ -134,12 +141,12 @@ export default function Stats() {
     const allKeys = enumerateGroups(startAll, today, groupBy);
 
     const cutoffKeys =
-      range === 'all'
-        ? allKeys
-        : (() => {
-            const n = range === '12m' ? 12 : 24;
-            return allKeys.slice(-n);
-          })();
+      range === 'all' ? allKeys :
+      range === 'ytd' ? allKeys.filter(k => k.startsWith(`${today.getFullYear()}`)) :
+      (() => {
+          const n = range === '6m' ? 6 : range === '12m' ? 12 : range === '24m' ? 24 : range === '36m' ? 36 : 12;
+          return allKeys.slice(-n);
+      })();
 
     // Build cumulative balances per account per group end (last day of month / end of year)
     const accIds = accounts.map(a => a.id);
@@ -227,22 +234,96 @@ export default function Stats() {
     [pieData.rows, hiddenAcc]
   );
 
-  // ==== NEW: Expenses by category (Transfer, Init excluded) ====
-const expensesByCategory = useMemo(() => {
-  const sums = new Map<string, number>();
-  for (const t of txCatItems) {
-    const name = (t.category ?? 'Uncategorized').toString();
-    const lc = name.toLowerCase();
-    if (lc === 'transfer' || lc === 'transfers' || lc === 'init') continue; // special buckets out
-    const v = Math.abs(t.amount ?? 0);
-    if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
-  }
-  const rows = Array.from(sums.entries())
-    .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
-    .sort((a, b) => b.value - a.value);
-  const total = rows.reduce((s, r) => s + r.value, 0);
-  return { rows, total };
-}, [txCatItems]);
+  // ==== Categories & Exclusions ====
+  const excludedCategories = useMemo(() => new Set(['transfer', 'transfers', 'init', 'korrektur']), []);
+
+  const expensesByCategory = useMemo(() => {
+    const sums = new Map<string, number>();
+    for (const t of txCatItems) {
+      if (t.amount >= 0) continue; // Only expenses
+      const name = (t.category ?? 'Uncategorized').toString();
+      const lc = name.toLowerCase();
+      if (excludedCategories.has(lc)) continue;
+      const v = Math.abs(t.amount);
+      if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
+    }
+    const rows = Array.from(sums.entries())
+      .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
+      .sort((a, b) => b.value - a.value);
+    const total = rows.reduce((s, r) => s + r.value, 0);
+    return { rows, total };
+  }, [txCatItems, excludedCategories, fallbackColors]);
+
+  const incomeByCategory = useMemo(() => {
+    const sums = new Map<string, number>();
+    for (const t of txCatItems) {
+      if (t.amount <= 0) continue; // Only income
+      const name = (t.category ?? 'Uncategorized').toString();
+      const lc = name.toLowerCase();
+      if (excludedCategories.has(lc)) continue;
+      const v = t.amount;
+      if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
+    }
+    const rows = Array.from(sums.entries())
+      .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
+      .sort((a, b) => b.value - a.value);
+    const total = rows.reduce((s, r) => s + r.value, 0);
+    return { rows, total };
+  }, [txCatItems, excludedCategories, fallbackColors]);
+
+  // Savings rate
+  const totalIncome = incomeByCategory.total;
+  const totalExpense = expensesByCategory.total;
+  const savingsRate = totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : 0;
+
+  // Top 5 Expenses
+  const topExpenses = useMemo(() => {
+    return [...txCatItems]
+      .filter(t => t.amount < 0 && !excludedCategories.has((t.category ?? '').toLowerCase()))
+      .sort((a, b) => a.amount - b.amount) // smaller negative value means larger expense
+      .slice(0, 5);
+  }, [txCatItems, excludedCategories]);
+
+  // Income vs Expenses over time (Bar Chart)
+  const incExpSeries = useMemo(() => {
+    const groupKey = (d: Date) =>
+      groupBy === 'yearly' ? `${d.getFullYear()}` : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+
+    const firstDate = txCatItems.length ? parseISO(txCatItems[0].date) : today;
+    const startAll = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+    const allKeys = enumerateGroups(startAll, today, groupBy);
+
+    const cutoffKeys =
+      range === 'all' ? allKeys :
+      range === 'ytd' ? allKeys.filter(k => k.startsWith(`${today.getFullYear()}`)) :
+      (() => {
+        const n = range === '6m' ? 6 : range === '12m' ? 12 : range === '24m' ? 24 : range === '36m' ? 36 : 12;
+        return allKeys.slice(-n);
+      })();
+
+    const buckets: Record<string, { income: number, expense: number }> = {};
+    for (const k of allKeys) buckets[k] = { income: 0, expense: 0 };
+
+    for (const t of txCatItems) {
+      const k = groupKey(parseISO(t.date));
+      if (!buckets[k]) continue;
+
+      const lc = (t.category ?? 'Uncategorized').toString().toLowerCase();
+      if (excludedCategories.has(lc)) continue;
+
+      if (t.amount > 0) buckets[k].income += t.amount;
+      else if (t.amount < 0) buckets[k].expense += Math.abs(t.amount);
+    }
+
+    return {
+      keys: cutoffKeys,
+      data: cutoffKeys.map(key => ({
+        key,
+        Income: buckets[key].income,
+        Expense: buckets[key].expense,
+      }))
+    };
+  }, [txCatItems, groupBy, range, excludedCategories]);
 
   /* =========================
          UI
@@ -250,7 +331,7 @@ const expensesByCategory = useMemo(() => {
   return (
     <div className="mx-auto w-full max-w={[1680]}px px-6 py-4 grid gap-6">
       {/* Top cards */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="card p-5">
           <p className="text-xs text-neutral-500">Total value</p>
           <div className="mt-1 text-3xl md:text-4xl font-bold">
@@ -273,7 +354,36 @@ const expensesByCategory = useMemo(() => {
           </div>
           <p className="text-xs text-neutral-500 mt-1">Transfers excluded</p>
         </div>
+
+        <div className="card p-5">
+          <p className="text-xs text-neutral-500">Avg Savings Rate</p>
+          <div className="mt-1 text-3xl md:text-4xl font-bold text-green-600 dark:text-green-500">
+            {hidden ? '***' : `${savingsRate.toFixed(1)}%`}
+          </div>
+          <p className="text-xs text-neutral-500 mt-1">Overall (Income vs Expenses)</p>
+        </div>
       </section>
+
+      {/* Top Expenses */}
+      {topExpenses.length > 0 && (
+        <section className="card p-5">
+          <h2 className="text-base font-semibold mb-3">Top Expenses (All time)</h2>
+          <div className="grid gap-2">
+            {topExpenses.map((t, idx) => (
+              <div key={idx} className="flex justify-between items-center text-sm border-b border-neutral-200 dark:border-neutral-800 pb-2 last:border-0 last:pb-0">
+                <div>
+                  <span className="font-medium">{t.date}</span>
+                  <span className="text-neutral-500 ml-2">{t.category ?? 'Uncategorized'}</span>
+                  {t.description && <div className="text-xs text-neutral-400 mt-0.5">{t.description}</div>}
+                </div>
+                <div className="font-semibold text-red-600 dark:text-red-500">
+                  <Amount value={t.amount} hidden={hidden} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
 {/* Split by account (Pie) */}
 <section className="card p-5">
@@ -367,47 +477,108 @@ const expensesByCategory = useMemo(() => {
   )}
 </section>
 
-      {/* ==== NEW: Expenses by category (Pie) ==== */}
-      <section className="card p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Expenses by category</h2>
-          <span className="text-xs text-neutral-500">Transfers excluded</span>
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Expenses by category (Pie) */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">Expenses by category</h2>
+            <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+          </div>
+          <div className="mt-3 w-full" style={{ height: 320 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={expensesByCategory.rows}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={110}
+                  label={({ name, percent }: { name?: string; percent?: number }) =>
+                    `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+                  }
+                >
+                  {expensesByCategory.rows.map((r, idx) => (
+                    <Cell key={idx} fill={r.color} />
+                  ))}
+                </Pie>
+                <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          {expensesByCategory.rows.length === 0 && (
+            <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+          )}
         </div>
 
-        <div className="mt-3 w-full" style={{ height: 320 }}>
+        {/* Income by category (Pie) */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">Income by category</h2>
+            <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+          </div>
+          <div className="mt-3 w-full" style={{ height: 320 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={incomeByCategory.rows}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={110}
+                  label={({ name, percent }: { name?: string; percent?: number }) =>
+                    `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+                  }
+                >
+                  {incomeByCategory.rows.map((r, idx) => (
+                    <Cell key={idx} fill={r.color} />
+                  ))}
+                </Pie>
+                <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          {incomeByCategory.rows.length === 0 && (
+            <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+          )}
+        </div>
+      </section>
+
+      {/* Income vs Expenses over time */}
+      <section className="card p-5">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h2 className="text-base font-semibold">Income vs Expenses</h2>
+          <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+        </div>
+        <div className="w-full" style={{ height: 360 }}>
           <ResponsiveContainer>
-            <PieChart>
-              <Pie
-                data={expensesByCategory.rows}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={110}
-                label={({ name, percent }: { name?: string; percent?: number }) =>
-                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-                }
-              >
-                {expensesByCategory.rows.map((r, idx) => (
-                  <Cell key={idx} fill={r.color} />
-                ))}
-              </Pie>
-              <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+            <BarChart data={incExpSeries.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="key" />
+              <YAxis tickFormatter={fmtMoneyShort} />
+              <RTooltip formatter={(v:any, n:any) => [fmtMoney(v), n]} labelFormatter={(l:any)=> l} />
               <RLegend />
-            </PieChart>
+              <Bar dataKey="Income" fill="#16a34a" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Expense" fill="#dc2626" radius={[4, 4, 0, 0]} />
+            </BarChart>
           </ResponsiveContainer>
         </div>
-
-        {expensesByCategory.rows.length === 0 && (
-          <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
-        )}
       </section>
 
       {/* Net worth over time (Lines) */}
       <section className="card p-5">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold">Value over time</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm select-none mr-2">
+              <input 
+                type="checkbox" 
+                checked={showIndividualAccounts}
+                onChange={e => setShowIndividualAccounts(e.target.checked)}
+              />
+              Show individual accounts
+            </label>
             <select
               className="input"
               value={groupBy}
@@ -423,8 +594,11 @@ const expensesByCategory = useMemo(() => {
               onChange={(e) => setRange(e.target.value as any)}
               title="Range"
             >
-              <option value="12m">Last 12</option>
-              <option value="24m">Last 24</option>
+              <option value="6m">Last 6m</option>
+              <option value="12m">Last 12m</option>
+              <option value="24m">Last 24m</option>
+              <option value="36m">Last 36m</option>
+              <option value="ytd">YTD</option>
               <option value="all">All time</option>
             </select>
           </div>
@@ -432,44 +606,65 @@ const expensesByCategory = useMemo(() => {
 
         <div className="mt-3 w-full" style={{ height: 360 }}>
           <ResponsiveContainer>
-            <LineChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="key" />
-              <YAxis tickFormatter={fmtMoneyShort} />
-              <RTooltip
-                formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
-                labelFormatter={(l:any)=> l}
-              />
-              <RLegend
-                onClick={(entry: any) => {
-                  // Expect dataKey of form 'acc_<id>' or 'total'
-                  const key = entry?.dataKey as string | undefined;
-                  if (!key) return;
-                  if (key === 'total') return; // keep Total always visible (optional)
-                  if (key.startsWith('acc_')) {
-                    const id = Number(key.slice(4));
-                    if (Number.isFinite(id)) toggleAcc(id);
-                  }
-                }}
-              />
-              {/* Total line */}
-              <Line type="monotone" dataKey="total" name="Total" stroke="#111827" strokeWidth={2} dot={false} />
-              {/* Per-account lines */}
-              {accountLines.map((l) => (
-                <Line
-                  key={l.id}
-                  type="monotone"
-                  dataKey={l.key}
-                  name={l.name}
-                  stroke={l.color}
-                  strokeWidth={1.8}
-                  dot={false}
-                  hide={isAccHidden(l.id)}   // <-- toggle visibility
+            {showIndividualAccounts ? (
+              <LineChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="key" />
+                <YAxis tickFormatter={fmtMoneyShort} />
+                <RTooltip
+                  formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
+                  labelFormatter={(l:any)=> l}
                 />
-              ))}
-
-              {series.data.length > 20 && <Brush dataKey="key" height={20} />}
-            </LineChart>
+                <RLegend
+                  onClick={(entry: any) => {
+                    const key = entry?.dataKey as string | undefined;
+                    if (!key || key === 'total') return;
+                    if (key.startsWith('acc_')) {
+                      const id = Number(key.slice(4));
+                      if (Number.isFinite(id)) toggleAcc(id);
+                    }
+                  }}
+                />
+                {accountLines.map((l) => (
+                  <Line
+                    key={l.id}
+                    type="monotone"
+                    dataKey={l.key}
+                    name={l.name}
+                    stroke={l.color}
+                    strokeWidth={1.8}
+                    dot={false}
+                    hide={isAccHidden(l.id)}
+                  />
+                ))}
+                {series.data.length > 20 && <Brush dataKey="key" height={20} />}
+              </LineChart>
+            ) : (
+              <AreaChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#111827" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#111827" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="key" />
+                <YAxis tickFormatter={fmtMoneyShort} />
+                <RTooltip
+                  formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
+                  labelFormatter={(l:any)=> l}
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="total" 
+                  name="Total Net Worth" 
+                  stroke="#111827" 
+                  fillOpacity={1} 
+                  fill="url(#colorTotal)" 
+                />
+                {series.data.length > 20 && <Brush dataKey="key" height={20} />}
+              </AreaChart>
+            )}
           </ResponsiveContainer>
         </div>
       </section>

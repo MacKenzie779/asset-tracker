@@ -1683,6 +1683,7 @@ async fn export_reimbursable_report_xlsx(
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
     columns: Option<Vec<String>>,
+    target_value: Option<f64>,
 ) -> Result<String, String> {
     use chrono::{Datelike, Local, NaiveDate};
     use rust_xlsxwriter::{Color, ExcelDateTime, Format, Workbook};
@@ -1778,12 +1779,29 @@ for it in &items_oldest {
 
 // Now turn remaining open items into rows (oldest → newest)
 let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
+let mut remaining_target = target_value.unwrap_or(f64::MAX);
+
 for o in open.iter() {
-    let adj = -o.remaining; // negative value to write
-    let partial_note = if (o.remaining + 1e-9) < o.original {
+    if remaining_target <= 1e-9 {
+        break; // target met
+    }
+
+    let mut adj = o.remaining; // positive
+    let mut is_target_partial = false;
+    
+    if adj > remaining_target {
+        adj = remaining_target;
+        is_target_partial = true;
+    }
+    
+    remaining_target -= adj;
+    
+    let adj_amount = -adj; // negative value to write
+
+    let partial_note = if is_target_partial || (adj + 1e-9) < o.original {
         Some(format!(
             "(partial: {} € of {} €)",
-            format_amount_eu(o.remaining),
+            format_amount_eu(adj),
             format_amount_eu(o.original)
         ))
     } else {
@@ -1791,7 +1809,7 @@ for o in open.iter() {
     };
     rows.push(RowRef {
         it: o.it,
-        adj_amount: adj,
+        adj_amount,
         partial_note,
     });
 }
@@ -2036,6 +2054,7 @@ async fn export_reimbursable_report_pdf(
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
     columns: Option<Vec<String>>,
+    target_value: Option<f64>,
 ) -> Result<String, String> {
     use printpdf::{BuiltinFont, IndirectFontRef, Mm, PdfDocument};
     use std::fs::File;
@@ -2112,19 +2131,35 @@ for it in &items_oldest {
 
 // Produce rows (oldest → newest), appending "(partial: x € of y €)" when needed
 let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
+let mut remaining_target = target_value.unwrap_or(f64::MAX);
+
 for o in open.iter() {
+    if remaining_target <= 1e-9 {
+        break; // target met
+    }
+
+    let mut adj = o.remaining; // positive
+    let mut is_target_partial = false;
+    
+    if adj > remaining_target {
+        adj = remaining_target;
+        is_target_partial = true;
+    }
+    
+    remaining_target -= adj;
+
     let mut desc = o.it.description.as_deref().unwrap_or("").to_string();
-    if (o.remaining + 1e-9) < o.original {
+    if is_target_partial || (adj + 1e-9) < o.original {
         let note = format!(
             "(partial: {} € of {} €)",
-            format_amount_eu(o.remaining),
+            format_amount_eu(adj),
             format_amount_eu(o.original)
         );
         desc = if desc.is_empty() { note } else { format!("{desc} {note}") };
     }
     rows.push(RowRef {
         it: o.it,
-        adj_amount: -o.remaining,
+        adj_amount: -adj,
         desc,
     });
 }

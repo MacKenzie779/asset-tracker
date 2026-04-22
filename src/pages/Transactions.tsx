@@ -109,6 +109,7 @@ export default function Transactions() {
 
   const [exportFmt, setExportFmt] = useState<'xlsx' | 'pdf'>('xlsx');
   const [exportOkPath, setExportOkPath] = useState<string | null>(null);
+  const [reimbursableTarget, setReimbursableTarget] = useState<string>('');
 
   const { hidden } = useOutletContext<OutletCtx>();
   const accounts = useAccounts();
@@ -314,10 +315,14 @@ const adjustedGlobal = useMemo(() => {
         query: query.trim() || undefined,
         tx_type: type,
       };
+      
+      const targetVal = reimbursableTarget.trim() ? parseFloat(reimbursableTarget.replace(',', '.')) : undefined;
+      const target = (targetVal !== undefined && !isNaN(targetVal) && targetVal > 0) ? targetVal : undefined;
+
       const path =
         exportFmt === 'pdf'
-          ? await exportReimbursableReportPdf(common, exportCols)
-          : await exportReimbursableReportXlsx(common, exportCols);
+          ? await exportReimbursableReportPdf(common, exportCols, target)
+          : await exportReimbursableReportXlsx(common, exportCols, target);
 
       setExportOkPath(path);
     } catch (e) {
@@ -607,18 +612,31 @@ const adjustedGlobal = useMemo(() => {
         </button>
 
         {/* NEW: reimbursable button */}
-        <button
-          className="btn w-full mt-2"
-          onClick={handleExportReimbursable}
-          disabled={loading || reimbursableDisabled}
-          title={
-            reimbursableDisabled
-              ? 'Filter to a reimbursable account to enable'
-              : undefined
-          }
-        >
-          Export reimbursable report
-        </button>
+        <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-800">
+          <div className="font-medium text-sm mb-2">Reimbursable report</div>
+          <div className="flex flex-col gap-2">
+            <input
+              type="text"
+              placeholder="Target value € (optional)"
+              className="input w-full"
+              value={reimbursableTarget}
+              onChange={(e) => setReimbursableTarget(e.target.value)}
+              disabled={reimbursableDisabled}
+            />
+            <button
+              className="btn w-full"
+              onClick={handleExportReimbursable}
+              disabled={loading || reimbursableDisabled}
+              title={
+                reimbursableDisabled
+                  ? 'Filter to a reimbursable account to enable'
+                  : undefined
+              }
+            >
+              Export reimbursable report
+            </button>
+          </div>
+        </div>
 
         <div className="text-xs text-neutral-500 mt-2">
           File will be saved into your Downloads folder with a timestamped name.

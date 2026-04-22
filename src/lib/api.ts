@@ -50,11 +50,11 @@ export async function exportTransactionsPdf(filters: TransactionSearch, columns?
 }
 
 /* NEW: reimbursable window exports */
-export async function exportReimbursableReportXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
-  return invoke<string>('export_reimbursable_report_xlsx', { filters, columns });
+export async function exportReimbursableReportXlsx(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
+  return invoke<string>('export_reimbursable_report_xlsx', { filters, columns, targetValue });
 }
-export async function exportReimbursableReportPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
-  return invoke<string>('export_reimbursable_report_pdf', { filters, columns });
+export async function exportReimbursableReportPdf(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
+  return invoke<string>('export_reimbursable_report_pdf', { filters, columns, targetValue });
 }
 
 // categories

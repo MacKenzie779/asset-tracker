@@ -172,8 +172,8 @@ export default function Layout() {
             title="Lock database (Ctrl+Shift+L)"
           >
             <IconLock />
-            <span className="hidden lg:inline">{locking ? 'Locking…' : 'Lock database'}</span>
-            <span className="sr-only lg:hidden">Lock database</span>
+            <span className="hidden lg:inline">{locking ? 'Locking…' : 'Log out'}</span>
+            <span className="sr-only lg:hidden">Log out</span>
           </button>
           <div className="text-center text-xs text-neutral-500 lg:text-left">
             <AppVersion />

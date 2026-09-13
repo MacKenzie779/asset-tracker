@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
+import { open as openWithSystem } from '@tauri-apps/plugin-shell';
 import {
   addTransaction,
+  addTransfer,
   deleteTransaction,
   listAccounts,
   listTransactions,
   updateTransaction,
 } from '../lib/api';
-import type { Account, Transaction, NewTransaction, UpdateTransaction } from '../types';
+import type { Account, Transaction, NewTransaction, NewTransfer, OpenDatabaseResult, UpdateTransaction } from '../types';
 import { errorMessage } from '../lib/errors';
+import { basename, dirname } from '../lib/path';
+import { owedToYou, totalValue, youOwe } from '../lib/people';
 import { useMutation } from '../hooks/useMutation';
 import Amount from '../components/Amount';
 import EmptyState from '../components/EmptyState';
@@ -18,14 +22,17 @@ import TransactionsTable from '../components/TransactionsTable';
 import TransactionAddRow from '../components/TransactionAddRow';
 import AccountsList from '../components/AccountsList';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { IconInbox } from '../components/icons';
 import type { LayoutOutletContext } from '../components/Layout';
 
 const RECENT_LIMIT = 12;
+const UPGRADE_NOTICE_KEY = 'db_upgrade_notice';
 
 export default function Home() {
   const { hidden } = useOutletContext<LayoutOutletContext>();
   const mutate = useMutation();
+  const toast = useToast();
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [tx, setTx] = useState<Transaction[]>([]);
@@ -53,23 +60,43 @@ export default function Home() {
     refresh();
   }, [refresh]);
 
-  const totalBalance = useMemo(() => {
-    return accounts.reduce((sum, a) => {
-      const v = Number.isFinite(a.balance) ? a.balance : 0;
-      return sum + (a.type === 'reimbursable' ? -v : v);
-    }, 0);
-  }, [accounts]);
+  // One-time notice after the database file was upgraded to a newer schema.
+  const noticeShown = useRef(false);
+  useEffect(() => {
+    if (noticeShown.current) return;
+    noticeShown.current = true;
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(UPGRADE_NOTICE_KEY);
+      sessionStorage.removeItem(UPGRADE_NOTICE_KEY);
+    } catch {}
+    if (!raw) return;
+    try {
+      const info = JSON.parse(raw) as OpenDatabaseResult;
+      const backup = info.backup_path;
+      toast.info('Your database was upgraded to the new format', {
+        description: backup
+          ? `Reimbursable accounts are now “people” with a natural sign. A copy of the old file was saved as ${basename(backup)}.`
+          : 'Reimbursable accounts are now “people” with a natural sign.',
+        duration: null,
+        actions: backup
+          ? [{ label: 'Show backup', onClick: () => openWithSystem(dirname(backup)).catch(() => {}) }]
+          : undefined,
+      });
+    } catch {}
+  }, [toast]);
 
-  // Sum of negative balances (as positive) for all reimbursable accounts: how much you're currently owed.
-  const toBeReimbursed = useMemo(() => {
-    return accounts
-      .filter((a) => a.type === 'reimbursable')
-      .reduce((sum, a) => sum + (a.balance < 0 ? -a.balance : 0), 0);
-  }, [accounts]);
+  const total = useMemo(() => totalValue(accounts), [accounts]);
+  const owed = useMemo(() => owedToYou(accounts), [accounts]);
+  const owe = useMemo(() => youOwe(accounts), [accounts]);
 
   // The add row reports its own outcome (one toast per batch).
   const handleAddTx = async (input: NewTransaction) => {
     await addTransaction(input);
+    await refresh();
+  };
+  const handleTransfer = async (input: NewTransfer) => {
+    await addTransfer(input);
     await refresh();
   };
 
@@ -84,10 +111,11 @@ export default function Home() {
   const confirmDeleteTx = async () => {
     if (confirmTxId == null) return;
     const id = confirmTxId;
+    const row = tx.find((t) => t.id === id);
     setConfirmTxId(null);
     try {
       await mutate(() => deleteTransaction(id), {
-        success: 'Transaction deleted',
+        success: row?.transfer_id != null ? 'Transfer deleted (both sides)' : 'Transaction deleted',
         error: 'Could not delete transaction',
       });
       await refresh();
@@ -97,16 +125,20 @@ export default function Home() {
   };
 
   const firstLoad = loading && accounts.length === 0 && tx.length === 0;
+  const pendingRow = confirmTxId != null ? tx.find((t) => t.id === confirmTxId) : undefined;
 
   return (
     <PageContainer>
       {/* Top stats */}
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        <KpiCard label="Total value" loading={firstLoad}>
-          <Amount value={totalBalance} hidden={hidden} />
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        <KpiCard label="Total value" hint="All accounts and people, net" loading={firstLoad}>
+          <Amount value={total} hidden={hidden} />
         </KpiCard>
-        <KpiCard label="To be reimbursed" loading={firstLoad}>
-          <Amount value={toBeReimbursed} hidden={hidden} />
+        <KpiCard label="Owed to you" hint="What people still have to pay you" loading={firstLoad}>
+          <Amount value={owed} hidden={hidden} colorBySign={false} className={owed > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''} />
+        </KpiCard>
+        <KpiCard label="You owe" hint="What you still have to pay people" loading={firstLoad}>
+          <Amount value={owe} hidden={hidden} colorBySign={false} className={owe > 0 ? 'text-rose-600 dark:text-rose-400' : ''} />
         </KpiCard>
       </section>
 
@@ -163,7 +195,7 @@ export default function Home() {
             </div>
 
             <div className="border-t border-neutral-200/50 dark:border-neutral-800/50">
-              <TransactionAddRow accounts={accounts} onAdd={handleAddTx} />
+              <TransactionAddRow accounts={accounts} onAdd={handleAddTx} onTransfer={handleTransfer} />
             </div>
           </div>
         </div>
@@ -194,8 +226,12 @@ export default function Home() {
 
       <ConfirmDialog
         open={confirmTxId !== null}
-        title="Delete transaction?"
-        description="This action cannot be undone."
+        title={pendingRow?.transfer_id != null ? 'Delete transfer?' : 'Delete transaction?'}
+        description={
+          pendingRow?.transfer_id != null
+            ? 'Both sides of this transfer will be removed. This action cannot be undone.'
+            : 'This action cannot be undone.'
+        }
         confirmText="Delete"
         variant="danger"
         onCancel={() => setConfirmTxId(null)}
@@ -205,13 +241,24 @@ export default function Home() {
   );
 }
 
-function KpiCard({ label, loading, children }: { label: string; loading: boolean; children: React.ReactNode }) {
+function KpiCard({
+  label,
+  hint,
+  loading,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  loading: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div className="card p-5">
       <p className="text-xs text-neutral-500">{label}</p>
       <div className="mt-1 text-3xl font-bold md:text-4xl">
         {loading ? <Skeleton className="mt-1 h-9 w-44" /> : children}
       </div>
+      {hint ? <p className="mt-1 text-xs text-neutral-500">{hint}</p> : null}
     </div>
   );
 }

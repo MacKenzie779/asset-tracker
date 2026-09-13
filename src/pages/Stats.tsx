@@ -18,6 +18,7 @@ import { chartTheme } from '../lib/theme';
 import { errorMessage } from '../lib/errors';
 import { formatDate } from '../lib/format';
 import { formatMoneyDE } from '../lib/number';
+import { owedToYou, totalValue, youOwe } from '../lib/people';
 
 // Recharts
 import {
@@ -26,7 +27,7 @@ import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Brush,
 } from 'recharts';
 
-type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null };
+type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null; transfer_id?: number | null };
 type GroupBy = 'monthly' | 'yearly';
 type Range = '6m' | '12m' | '24m' | '36m' | 'ytd' | 'all';
 
@@ -100,7 +101,8 @@ export default function Stats() {
             date: it.date,
             amount: it.amount,
             category: it.category,
-            description: it.description
+            description: it.description,
+            transfer_id: it.transfer_id ?? null,
           })));
           const total: number = (res as any).total ?? items.length;
           offset += pageSize;
@@ -122,22 +124,18 @@ export default function Stats() {
      Derived values / helpers
      ========================= */
 
-  // Net worth pie (reimbursables inverted)
+  // Net worth pie: every positive balance is an asset, including what people owe you
   const pieData = useMemo(() => {
     const rows = accounts.map((a, i) => {
-      const adj = a.type === 'reimbursable' ? - (a.balance ?? 0) : (a.balance ?? 0);
-      return { id: a.id, name: a.name, value: adj, color: colorFor(i, a.color) };
+      return { id: a.id, name: a.name, value: a.balance ?? 0, color: colorFor(i, a.color) };
     }).filter(r => r.value > 0.000001); // pie can't show negatives; we skip <=0 slices
     const total = rows.reduce((s,r)=>s+r.value,0);
     return { rows, total };
   }, [accounts]);
 
-  // To be reimbursed (sum of negative balances on reimb accounts, shown positive)
-  const toBeReimbursed = useMemo(() => {
-    return accounts
-      .filter(a => a.type === 'reimbursable')
-      .reduce((sum, a) => sum + (a.balance < 0 ? -a.balance : 0), 0);
-  }, [accounts]);
+  // Balances with people
+  const owed = useMemo(() => owedToYou(accounts), [accounts]);
+  const owe = useMemo(() => youOwe(accounts), [accounts]);
 
   // Monthly net for current month (backend sums exclude transfers)
   const [monthNet, setMonthNet] = useState<number>(0);
@@ -155,8 +153,7 @@ export default function Stats() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Build time series (monthly/yearly) for:
-  // total net worth (reimb inverted) and each account (also inverted for consistency)
+  // --- Build time series (monthly/yearly) for total net worth and each account
   const series = useMemo(() => {
     if (!accounts.length) return { keys: [] as string[], data: [] as any[] };
 
@@ -208,16 +205,12 @@ export default function Stats() {
       // snapshot at group end
       const point: any = { key };
 
-      // per-account (reimb inverted)
+      // per-account
       for (const a of accounts) {
-        const bal = run[a.id] || 0;
-        point[`acc_${a.id}`] = a.type === 'reimbursable' ? -bal : bal;
+        point[`acc_${a.id}`] = run[a.id] || 0;
       }
-      // total net worth (sum of adjusted balances)
-      point.total = accounts.reduce((s, a) => {
-        const bal = run[a.id] || 0;
-        return s + (a.type === 'reimbursable' ? -bal : bal);
-      }, 0);
+      // total net worth (plain sum of balances)
+      point.total = accounts.reduce((s, a) => s + (run[a.id] || 0), 0);
 
       rows.push(point);
     }
@@ -240,12 +233,7 @@ export default function Stats() {
     }));
   }, [accounts]);
 
-  const totalBalance = useMemo(() => {
-    return accounts.reduce((sum, a) => {
-      const v = Number.isFinite(a.balance) ? a.balance : 0;
-      return sum + (a.type === 'reimbursable' ? -v : v);
-    }, 0);
-  }, [accounts]);
+  const totalBalance = useMemo(() => totalValue(accounts), [accounts]);
 
   // Toggle visibility by account (affects lines & pie)
   const [hiddenAcc, setHiddenAcc] = useState<Set<number>>(new Set());
@@ -266,6 +254,7 @@ export default function Stats() {
   const expensesByCategory = useMemo(() => {
     const sums = new Map<string, number>();
     for (const tx of txCatItems) {
+      if (tx.transfer_id != null) continue; // transfer legs are not spending
       if (tx.amount >= 0) continue; // Only expenses
       const name = (tx.category ?? 'Uncategorized').toString();
       const lc = name.toLowerCase();
@@ -283,6 +272,7 @@ export default function Stats() {
   const incomeByCategory = useMemo(() => {
     const sums = new Map<string, number>();
     for (const tx of txCatItems) {
+      if (tx.transfer_id != null) continue; // transfer legs are not income
       if (tx.amount <= 0) continue; // Only income
       const name = (tx.category ?? 'Uncategorized').toString();
       const lc = name.toLowerCase();
@@ -305,7 +295,7 @@ export default function Stats() {
   // Top 5 Expenses
   const topExpenses = useMemo(() => {
     return [...txCatItems]
-      .filter(tx => tx.amount < 0 && !EXCLUDED_CATEGORIES.has((tx.category ?? '').toLowerCase()))
+      .filter(tx => tx.amount < 0 && tx.transfer_id == null && !EXCLUDED_CATEGORIES.has((tx.category ?? '').toLowerCase()))
       .sort((a, b) => a.amount - b.amount) // smaller negative value means larger expense
       .slice(0, 5);
   }, [txCatItems]);
@@ -331,6 +321,7 @@ export default function Stats() {
     for (const k of allKeys) buckets[k] = { income: 0, expense: 0 };
 
     for (const tx of txCatItems) {
+      if (tx.transfer_id != null) continue;
       const k = groupKey(parseISO(tx.date));
       if (!buckets[k]) continue;
 
@@ -372,20 +363,33 @@ export default function Stats() {
   return (
     <PageContainer className="grid gap-6">
       {/* Top cards */}
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-3 2xl:grid-cols-5">
         <div className="card p-5">
           <p className="text-xs text-neutral-500">Total value</p>
           <div className="mt-1 text-3xl font-bold md:text-4xl">
             {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : <Amount value={totalBalance} hidden={hidden} />}
           </div>
-          <p className="mt-1 text-xs text-neutral-500">Reimbursables counted as receivables</p>
+          <p className="mt-1 text-xs text-neutral-500">Accounts plus balances with people</p>
         </div>
 
         <div className="card p-5">
-          <p className="text-xs text-neutral-500">To be reimbursed</p>
+          <p className="text-xs text-neutral-500">Owed to you</p>
           <div className="mt-1 text-3xl font-bold md:text-4xl">
-            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : <Amount value={toBeReimbursed} hidden={hidden} />}
+            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : (
+              <Amount value={owed} hidden={hidden} colorBySign={false} className={owed > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''} />
+            )}
           </div>
+          <p className="mt-1 text-xs text-neutral-500">What people still have to pay you</p>
+        </div>
+
+        <div className="card p-5">
+          <p className="text-xs text-neutral-500">You owe</p>
+          <div className="mt-1 text-3xl font-bold md:text-4xl">
+            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : (
+              <Amount value={owe} hidden={hidden} colorBySign={false} className={owe > 0 ? 'text-rose-600 dark:text-rose-400' : ''} />
+            )}
+          </div>
+          <p className="mt-1 text-xs text-neutral-500">What you still have to pay people</p>
         </div>
 
         <div className="card p-5">

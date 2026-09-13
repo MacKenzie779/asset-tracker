@@ -13,9 +13,9 @@ import EmptyState from '../components/EmptyState';
 import IconButton from '../components/IconButton';
 import PageContainer from '../components/PageContainer';
 import Skeleton from '../components/Skeleton';
-import { IconArrowDown, IconArrowUp, IconPlus, IconWallet } from '../components/icons';
+import { IconArrowDown, IconArrowUp, IconPlus, IconUser, IconWallet } from '../components/icons';
 
-type SortBy = 'name' | 'balance' | 'type';
+type SortBy = 'name' | 'balance';
 
 export default function Accounts() {
   const { hidden } = useOutletContext<LayoutOutletContext>();
@@ -50,35 +50,23 @@ export default function Accounts() {
     refresh();
   }, [refresh]);
 
-  const sortedItems = useMemo(() => {
+  const sorted = useMemo(() => {
     const arr = [...items];
     arr.sort((a, b) => {
-      let va: string | number;
-      let vb: string | number;
-      switch (sortBy) {
-        case 'balance':
-          va = a.balance;
-          vb = b.balance;
-          break;
-        case 'type':
-          va = a.type;
-          vb = b.type;
-          break;
-        default:
-          va = a.name.toLowerCase();
-          vb = b.name.toLowerCase();
-      }
       let cmp = 0;
-      if (va < vb) cmp = -1;
-      else if (va > vb) cmp = 1;
+      if (sortBy === 'balance') cmp = a.balance - b.balance;
+      else cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return arr;
   }, [items, sortBy, sortDir]);
 
+  const own = useMemo(() => sorted.filter((a) => a.type !== 'person'), [sorted]);
+  const people = useMemo(() => sorted.filter((a) => a.type === 'person'), [sorted]);
+
   const handleCreate = async (input: NewAccount) => {
     await mutate(() => addAccount(input), {
-      success: 'Account created',
+      success: input.account_type === 'person' ? 'Person added' : 'Account created',
       error: 'Could not create account',
     });
     await refresh();
@@ -106,14 +94,34 @@ export default function Accounts() {
   };
 
   const firstLoad = loading && items.length === 0;
+  const countLabel = firstLoad
+    ? 'Loading…'
+    : [
+        `${own.length} account${own.length === 1 ? '' : 's'}`,
+        people.length > 0 ? `${people.length} ${people.length === 1 ? 'person' : 'people'}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+  const renderGrid = (list: Account[]) => (
+    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {list.map((a) => (
+        <AccountCard
+          key={a.id}
+          account={a}
+          hidden={hidden}
+          onSave={(patch) => handleUpdate(a.id, patch)}
+          onDelete={() => setConfirmId(a.id)}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <PageContainer className="pb-24">
       {/* Toolbar: count + sorting */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-neutral-500">
-          {firstLoad ? 'Loading…' : `${items.length} account${items.length === 1 ? '' : 's'}`}
-        </div>
+        <div className="text-sm text-neutral-500">{countLabel}</div>
         <div className="flex items-center gap-2">
           <label htmlFor="accounts-sort" className="label">
             Sort by
@@ -126,7 +134,6 @@ export default function Accounts() {
           >
             <option value="name">Name</option>
             <option value="balance">Balance</option>
-            <option value="type">Type</option>
           </select>
           <IconButton
             label={sortDir === 'asc' ? 'Ascending (switch to descending)' : 'Descending (switch to ascending)'}
@@ -168,28 +175,40 @@ export default function Accounts() {
           />
         </div>
       ) : (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {sortedItems.map((a) => (
-            <AccountCard
-              key={a.id}
-              account={a}
-              hidden={hidden}
-              onSave={(patch) => handleUpdate(a.id, patch)}
-              onDelete={() => setConfirmId(a.id)}
-            />
-          ))}
+        <div className="space-y-8">
+          {own.length > 0 && (
+            <section>
+              {people.length > 0 && (
+                <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+                  <IconWallet className="h-4 w-4" /> Your accounts
+                </h2>
+              )}
+              {renderGrid(own)}
+            </section>
+          )}
+          {people.length > 0 && (
+            <section>
+              <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+                <IconUser className="h-4 w-4" /> People
+              </h2>
+              <p className="mb-3 text-xs text-neutral-500">
+                People you settle up with. A positive balance means they owe you, a negative one that you owe them.
+              </p>
+              {renderGrid(people)}
+            </section>
+          )}
         </div>
       )}
 
-      {/* Floating "Create new account" button */}
+      {/* Floating "Create" button */}
       <button
         type="button"
         onClick={() => setOpenCreate(true)}
         className="btn btn-primary fixed bottom-6 right-6 rounded-2xl px-4 py-3 shadow-lg"
-        aria-label="Create new account"
+        aria-label="Create account or add a person"
       >
         <IconPlus className="h-5 w-5" strokeWidth={2} />
-        <span className="hidden sm:inline">Create new account</span>
+        <span className="hidden sm:inline">New account or person</span>
       </button>
 
       <CreateAccountDialog open={openCreate} onClose={() => setOpenCreate(false)} onCreate={handleCreate} />

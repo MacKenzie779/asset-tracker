@@ -2,7 +2,8 @@
 
 export type ID = number;
 
-export type AccountType = 'standard' | 'reimbursable';
+/** "standard": your own money. "person": someone you settle up with (balance > 0 = they owe you). */
+export type AccountType = 'standard' | 'person';
 
 export type Account = {
   id: ID;
@@ -37,6 +38,8 @@ export type Transaction = {
   category?: string | null;
   description?: string | null;
   amount: number;
+  /** Both legs of a transfer share the id of the source leg. */
+  transfer_id?: number | null;
 };
 
 export type NewTransaction = {
@@ -54,6 +57,24 @@ export type UpdateTransaction = {
   amount?: number;
   description?: string | null;
   category?: string | null;
+};
+
+/** A transfer: `amount` leaves `from_account_id` and arrives at `to_account_id`. */
+export type NewTransfer = {
+  from_account_id: ID;
+  to_account_id: ID;
+  date: string;
+  amount: number;
+  description?: string | null;
+  /** What the money was for; defaults to "Transfer" for plain moves between your own accounts. */
+  category?: string | null;
+};
+
+export type TransferIds = { from_id: ID; to_id: ID };
+
+export type OpenDatabaseResult = {
+  migrated: boolean;
+  backup_path: string | null;
 };
 
 export type TxTypeFilter = 'all' | 'income' | 'expense';
@@ -76,12 +97,11 @@ export type TransactionSearchResult = {
   items: Transaction[];
   total: number;
   offset: number;
+  /** Income and expense exclude transfers and initial balances. */
   sum_income: number;
   sum_expense: number;
-  // NEW (global sums split by account type)
-  sum_income_std?: number;
-  sum_expense_std?: number;
-  sum_income_reimb?: number;
-  sum_expense_reimb?: number;
-  sum_init?: number;
+  /** Initial balances ("Init") in the filtered set. */
+  sum_init: number;
+  /** Net of transfer legs in the filtered set (0 when viewing all accounts). */
+  sum_transfer: number;
 };

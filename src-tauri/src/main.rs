@@ -20,7 +20,7 @@ struct AccountOut {
     color: Option<String>,
     #[sqlx(rename = "account_type")]
     #[serde(rename = "type")]
-    r#type: String, // "standard" | "reimbursable"
+    r#type: String, // "standard" | "person"
     balance: f64,
 }
 
@@ -34,6 +34,8 @@ struct TransactionOut {
     category: Option<String>,
     description: Option<String>,
     amount: f64,
+    /// Both legs of a transfer share the id of the source leg.
+    transfer_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +45,25 @@ struct NewTransaction {
     description: Option<String>,
     amount: f64,
     category: Option<String>,
+}
+
+/// A transfer between two accounts: `amount` leaves `from_account_id` and arrives at `to_account_id`.
+/// `category` records what the money was for (e.g. the expense paid for a person);
+/// it defaults to "Transfer" for plain moves between your own accounts.
+#[derive(Debug, Deserialize)]
+struct NewTransfer {
+    from_account_id: i64,
+    to_account_id: i64,
+    date: String, // YYYY-MM-DD
+    amount: f64,
+    description: Option<String>,
+    category: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TransferIds {
+    from_id: i64,
+    to_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,14 +95,13 @@ struct TxSearchResult {
     items: Vec<TransactionOut>,
     total: i64,
     offset: i64,
+    /// Income and expense exclude transfers and initial balances.
     sum_income: f64,
     sum_expense: f64,
-    sum_income_std: f64,
-    sum_expense_std: f64,
-    sum_income_reimb: f64,
-    sum_expense_reimb: f64,
-    // NEW
+    /// Initial balances ("Init") in the filtered set.
     sum_init: f64,
+    /// Net of transfer legs in the filtered set (0 when viewing all accounts).
+    sum_transfer: f64,
 }
 
 /* ---------- Categories (DB-level unique) ---------- */
@@ -115,7 +135,7 @@ async fn get_or_create_category_id(
 struct NewAccountInput {
     name: String,
     color: Option<String>,
-    account_type: String, // "standard" | "reimbursable"
+    account_type: String, // "standard" | "person"
     initial_balance: Option<f64>,
 }
 
@@ -123,10 +143,17 @@ struct NewAccountInput {
 async fn add_account(state: State<'_, AppState>, input: NewAccountInput) -> Result<i64, String> {
     let pool = current_pool(&state).await;
 
+    let account_type = match input.account_type.trim().to_lowercase().as_str() {
+        "standard" | "" => "standard",
+        // "reimbursable" is the pre-2.0 name of a person account
+        "person" | "reimbursable" => "person",
+        other => return Err(format!("Unknown account type '{other}'")),
+    };
+
     let rec = sqlx::query("INSERT INTO accounts (name, color, type) VALUES (?1, ?2, ?3);")
         .bind(&input.name)
         .bind(&input.color)
-        .bind(&input.account_type)
+        .bind(account_type)
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -202,7 +229,8 @@ async fn list_transactions(
       t.date,
       c.name AS category,
       t.description,
-      t.amount
+      t.amount,
+      t.transfer_id
     FROM transactions t
     JOIN accounts a ON a.id = t.account_id
     LEFT JOIN categories c ON c.id = t.category_id
@@ -242,12 +270,81 @@ async fn add_transaction(state: State<'_, AppState>, input: NewTransaction) -> R
     Ok(rec.last_insert_rowid())
 }
 
+/// Insert both legs of a transfer atomically and link them through `transfer_id`.
+async fn add_transfer_impl(pool: &SqlitePool, input: &NewTransfer) -> Result<TransferIds, String> {
+    if input.from_account_id == input.to_account_id {
+        return Err("Source and destination account must differ".into());
+    }
+    let amount = input.amount.abs();
+    if !(amount > 0.0) {
+        return Err("Amount must be non-zero".into());
+    }
+    let category = input
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .unwrap_or("Transfer")
+        .to_string();
+    let cat_id = get_or_create_category_id(pool, Some(category))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let from_id = sqlx::query(
+        "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5);",
+    )
+    .bind(input.from_account_id)
+    .bind(&input.date)
+    .bind(&input.description)
+    .bind(-amount)
+    .bind(cat_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .last_insert_rowid();
+    let to_id = sqlx::query(
+        "INSERT INTO transactions (account_id, date, description, amount, category_id, transfer_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+    )
+    .bind(input.to_account_id)
+    .bind(&input.date)
+    .bind(&input.description)
+    .bind(amount)
+    .bind(cat_id)
+    .bind(from_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .last_insert_rowid();
+    sqlx::query("UPDATE transactions SET transfer_id = ?1 WHERE id = ?1")
+        .bind(from_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(TransferIds { from_id, to_id })
+}
+
+#[tauri::command]
+async fn add_transfer(state: State<'_, AppState>, input: NewTransfer) -> Result<TransferIds, String> {
+    let pool = current_pool(&state).await;
+    add_transfer_impl(&pool, &input).await
+}
+
 #[tauri::command]
 async fn update_transaction(
     state: State<'_, AppState>,
     input: UpdateTransaction,
 ) -> Result<bool, String> {
     let pool = current_pool(&state).await;
+
+    // remembered for the linked transfer leg (the values below are moved into the query)
+    let sync_date = input.date.clone();
+    let sync_desc = input.description.clone();
+    let sync_amount = input.amount;
+    let mut sync_category: Option<Option<i64>> = None;
 
     let mut sql = String::from("UPDATE transactions SET ");
     let mut first = true;
@@ -283,6 +380,7 @@ async fn update_transaction(
         let cat_id = get_or_create_category_id(&pool, input.category.clone())
             .await
             .map_err(|e| e.to_string())?;
+        sync_category = Some(cat_id);
         match cat_id {
             Some(id) => {
                 push_set(&mut sql, &mut first, "category_id");
@@ -310,6 +408,54 @@ async fn update_transaction(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Keep the other leg of a linked transfer in sync: same date, notes and
+    // category, amount with the opposite sign. Only the account is per leg.
+    let link: Option<i64> =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT transfer_id FROM transactions WHERE id = ?1")
+            .bind(input.id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+    if let Some(tid) = link {
+        if let Some(v) = sync_date {
+            sqlx::query("UPDATE transactions SET date = ?1 WHERE transfer_id = ?2 AND id <> ?3")
+                .bind(v)
+                .bind(tid)
+                .bind(input.id)
+                .execute(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(v) = sync_desc {
+            sqlx::query("UPDATE transactions SET description = ?1 WHERE transfer_id = ?2 AND id <> ?3")
+                .bind(v)
+                .bind(tid)
+                .bind(input.id)
+                .execute(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(v) = sync_amount {
+            sqlx::query("UPDATE transactions SET amount = ?1 WHERE transfer_id = ?2 AND id <> ?3")
+                .bind(-v)
+                .bind(tid)
+                .bind(input.id)
+                .execute(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(cat) = sync_category {
+            sqlx::query("UPDATE transactions SET category_id = ?1 WHERE transfer_id = ?2 AND id <> ?3")
+                .bind(cat)
+                .bind(tid)
+                .bind(input.id)
+                .execute(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     Ok(res.rows_affected() > 0)
 }
 
@@ -317,11 +463,30 @@ async fn update_transaction(
 async fn delete_transaction(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
     let pool = current_pool(&state).await;
 
-    let res = sqlx::query("DELETE FROM transactions WHERE id = ?1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    delete_transaction_impl(&pool, id).await
+}
+
+/// Delete a transaction; a linked transfer loses both legs.
+async fn delete_transaction_impl(pool: &SqlitePool, id: i64) -> Result<bool, String> {
+    let link: Option<i64> =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT transfer_id FROM transactions WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+    let res = match link {
+        Some(tid) => sqlx::query("DELETE FROM transactions WHERE id = ?1 OR transfer_id = ?2")
+            .bind(id)
+            .bind(tid)
+            .execute(pool)
+            .await,
+        None => sqlx::query("DELETE FROM transactions WHERE id = ?1")
+            .bind(id)
+            .execute(pool)
+            .await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(res.rows_affected() > 0)
 }
 
@@ -501,7 +666,7 @@ async fn search_transactions(
     // Items
     let mut sql_items = String::from(
         "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, c.name AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount, t.transfer_id \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id",
@@ -525,29 +690,27 @@ async fn search_transactions(
     let items = q_items.fetch_all(&pool).await.map_err(|e| e.to_string())?;
 
     /* ---------- Sums (global across all results, not current page) ----------
-       Exclude category = 'Transfer' (case-insensitive) because internal transfers
-       don’t change net income/expense.
+       Income/expense exclude transfers (linked legs or category "Transfer") and
+       initial balances ("Init"). Both are returned separately so the frontend
+       can show the change of balance for the filtered set.
     */
-    let mut sql_sums = String::from(
-    "SELECT \
-       COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount END), 0.0) AS income, \
-       COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0.0) AS expense, \
-       COALESCE(SUM(CASE WHEN a.type = 'standard'     AND t.amount > 0 THEN t.amount END), 0.0) AS inc_std, \
-       COALESCE(SUM(CASE WHEN a.type = 'standard'     AND t.amount < 0 THEN t.amount END), 0.0) AS exp_std, \
-       COALESCE(SUM(CASE WHEN a.type = 'reimbursable' AND t.amount > 0 THEN t.amount END), 0.0) AS inc_reimb, \
-       COALESCE(SUM(CASE WHEN a.type = 'reimbursable' AND t.amount < 0 THEN t.amount END), 0.0) AS exp_reimb \
-     FROM transactions t \
-     JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id"
-  );
+    let is_transfer = "(t.transfer_id IS NOT NULL OR LOWER(COALESCE(c.name, '')) = 'transfer')";
+    let is_init = "(LOWER(COALESCE(c.name, '')) = 'init')";
+    let mut sql_sums = format!(
+        "SELECT \
+           COALESCE(SUM(CASE WHEN NOT {tr} AND NOT {ini} AND t.amount > 0 THEN t.amount END), 0.0) AS income, \
+           COALESCE(SUM(CASE WHEN NOT {tr} AND NOT {ini} AND t.amount < 0 THEN t.amount END), 0.0) AS expense, \
+           COALESCE(SUM(CASE WHEN {ini} THEN t.amount END), 0.0) AS init, \
+           COALESCE(SUM(CASE WHEN {tr} THEN t.amount END), 0.0) AS transfer \
+         FROM transactions t \
+         JOIN accounts a ON a.id = t.account_id \
+         LEFT JOIN categories c ON c.id = t.category_id",
+        tr = is_transfer,
+        ini = is_init
+    );
+    sql_sums.push_str(&where_sql);
 
-    // Start from the same WHERE (filters), then add "not transfer" for sums only
-    let mut where_sums = where_sql.clone();
-    where_sums.push_str(" AND LOWER(c.name) NOT IN ('transfer', 'init') ");
-
-    sql_sums.push_str(&where_sums);
-
-    let mut q_sums = sqlx::query_as::<_, (f64, f64, f64, f64, f64, f64)>(&sql_sums);
+    let mut q_sums = sqlx::query_as::<_, (f64, f64, f64, f64)>(&sql_sums);
     for a in &args {
         match a {
             BindArg::I(v) => {
@@ -558,33 +721,8 @@ async fn search_transactions(
             }
         }
     }
-
-    let (sum_income, sum_expense, inc_std, exp_std, inc_reimb, exp_reimb) =
+    let (sum_income, sum_expense, sum_init, sum_transfer) =
         q_sums.fetch_one(&pool).await.map_err(|e| e.to_string())?;
-
-    // --- Init sum (only "Init", included in saldo but not in income/expense) ---
-    let mut sql_init = String::from(
-        "SELECT COALESCE(SUM(t.amount), 0.0) \
-     FROM transactions t \
-     JOIN accounts a ON a.id = t.account_id \
-     LEFT JOIN categories c ON c.id = t.category_id",
-    );
-    let mut where_init = where_sql.clone();
-    where_init.push_str(" AND LOWER(c.name) = 'init' ");
-    sql_init.push_str(&where_init);
-
-    let mut q_init = sqlx::query_scalar::<_, f64>(&sql_init);
-    for a in &args {
-        match a {
-            BindArg::I(v) => {
-                q_init = q_init.bind(*v);
-            }
-            BindArg::S(s) => {
-                q_init = q_init.bind(s);
-            }
-        }
-    }
-    let sum_init = q_init.fetch_one(&pool).await.map_err(|e| e.to_string())?;
 
     Ok(TxSearchResult {
         items,
@@ -592,11 +730,8 @@ async fn search_transactions(
         offset: effective_offset,
         sum_income,
         sum_expense,
-        sum_income_std: inc_std,
-        sum_expense_std: exp_std,
-        sum_income_reimb: inc_reimb,
-        sum_expense_reimb: exp_reimb,
         sum_init,
+        sum_transfer,
     })
 }
 
@@ -619,7 +754,7 @@ async fn export_transactions_xlsx(
     /* ---------- Fetch all matching rows (no paging) ---------- */
     let mut sql = String::from(
         "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, c.name AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount, t.transfer_id \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id",
@@ -873,7 +1008,7 @@ async fn export_transactions_xlsx(
             .as_deref()
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_default();
-        let is_transfer = lower_cat == "transfer";
+        let is_transfer = lower_cat == "transfer" || item.transfer_id.is_some();
         let is_init = lower_cat == "init";
 
         if is_init {
@@ -974,7 +1109,7 @@ async fn export_transactions_pdf(
 
     let mut sql = String::from(
         "SELECT t.id, t.account_id, a.name AS account_name, a.color AS account_color, \
-            t.date, c.name AS category, t.description, t.amount \
+            t.date, c.name AS category, t.description, t.amount, t.transfer_id \
      FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      LEFT JOIN categories c ON c.id = t.category_id",
@@ -1238,7 +1373,7 @@ async fn export_transactions_pdf(
             .as_deref()
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_default();
-        let is_transfer = lower == "transfer";
+        let is_transfer = lower == "transfer" || it.transfer_id.is_some();
         let is_init = lower == "init";
 
         if is_init {
@@ -1598,19 +1733,27 @@ fn clip_for_width_with_font(
     out
 }
 
-/// Compute the open reimbursement window for a reimbursable account.
+/// Compute the open settlement window for a person account.
+///
+/// Amounts on a person account are naturally signed (positive = they owe you).
+/// The matchers in the report functions work on "working" amounts where a
+/// negative value is an open item and a positive value pays open items off,
+/// oldest first. Which side is "open" depends on the current balance: if they
+/// owe you, the open items are what they still have to pay; if you owe them,
+/// the open items are what you still have to pay.
 ///
 /// Returns:
 /// - account_name
-/// - current_balance (final running sum over all tx)
-/// - carry_at_cut (>=0): positive balance at the cut point that must be applied to subsequent expenses
-/// - slice_oldest_first: transactions *after* the cut, in the natural order (oldest → newest)
-async fn compute_reimbursable_slice(
+/// - current_balance (natural sign)
+/// - they_owe: true when the balance is >= 0
+/// - carry_at_cut (>=0): payoff that happened before the window and applies to its first items
+/// - window_oldest_first: rows after the last time nothing was open, with working amounts
+async fn compute_settlement_slice(
     pool: &SqlitePool,
     account_id: i64,
-) -> Result<(String, f64, f64, Vec<TransactionOut>), String> {
+) -> Result<(String, f64, bool, f64, Vec<TransactionOut>), String> {
     // Ensure account exists + type + current balance
-    let (acc_name, acc_type, _balance): (String, String, f64) = sqlx::query_as(
+    let (acc_name, acc_type, balance): (String, String, f64) = sqlx::query_as(
         r#"
         SELECT a.name, a.type, COALESCE(SUM(t.amount), 0.0) AS balance
         FROM accounts a
@@ -1625,16 +1768,16 @@ async fn compute_reimbursable_slice(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Account not found".to_string())?;
 
-    if acc_type.to_lowercase() != "reimbursable" {
-        return Err("This export requires a reimbursable account".into());
+    if acc_type.to_lowercase() != "person" {
+        return Err("This report requires a person account".into());
     }
 
     // Load all tx for this account (oldest→newest)
-    let oldest_first = sqlx::query_as::<_, TransactionOut>(
+    let mut oldest_first = sqlx::query_as::<_, TransactionOut>(
         r#"
         SELECT
           t.id, t.account_id, a.name AS account_name, a.color AS account_color,
-          t.date, c.name AS category, t.description, t.amount
+          t.date, c.name AS category, t.description, t.amount, t.transfer_id
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
         LEFT JOIN categories c ON c.id = t.category_id
@@ -1647,7 +1790,15 @@ async fn compute_reimbursable_slice(
     .await
     .map_err(|e| e.to_string())?;
 
-    // Running balance to find the last moment the balance was >= 0
+    // Working sign: open items negative, payoffs positive.
+    let they_owe = balance > -1e-9;
+    for it in oldest_first.iter_mut() {
+        if they_owe {
+            it.amount = -it.amount;
+        }
+    }
+
+    // Running balance to find the last moment nothing was open
     let mut running = 0.0f64;
     let mut last_non_neg_idx: isize = -1;
     let mut carry_at_cut: f64 = 0.0;
@@ -1660,25 +1811,18 @@ async fn compute_reimbursable_slice(
     }
 
     // Slice AFTER that index (these are candidates), keep order oldest → newest
-// Slice AFTER that index (these are candidates), keep order oldest → newest
-let start_idx: usize = ((last_non_neg_idx + 1).max(0)) as usize;
-let slice_oldest_first: Vec<TransactionOut> = if start_idx < oldest_first.len() {
-    oldest_first[start_idx..].to_vec()
-} else {
-    Vec::new()
-};
+    let start_idx: usize = ((last_non_neg_idx + 1).max(0)) as usize;
+    let slice_oldest_first: Vec<TransactionOut> = if start_idx < oldest_first.len() {
+        oldest_first[start_idx..].to_vec()
+    } else {
+        Vec::new()
+    };
 
-
-    Ok((
-        acc_name,
-        running, /*current_balance*/
-        carry_at_cut,
-        slice_oldest_first,
-    ))
+    Ok((acc_name, balance, they_owe, carry_at_cut, slice_oldest_first))
 }
 
 #[tauri::command]
-async fn export_reimbursable_report_xlsx(
+async fn export_settlement_report_xlsx(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
@@ -1691,9 +1835,14 @@ async fn export_reimbursable_report_xlsx(
 
     let acc_id = filters
         .account_id
-        .ok_or("Filter to a reimbursable account first")?;
-    let (account_label, _current_balance, carry_at_cut, items_oldest) =
-        compute_reimbursable_slice(&pool, acc_id).await?;
+        .ok_or("Filter to a person account first")?;
+    let (account_label, _current_balance, they_owe, carry_at_cut, items_oldest) =
+        compute_settlement_slice(&pool, acc_id).await?;
+    let direction_label = if they_owe {
+        format!("{} owes you", account_label)
+    } else {
+        format!("You owe {}", account_label)
+    };
 
     // Columns (stable order)
     let mut cols = columns.unwrap_or_else(|| {
@@ -1796,7 +1945,7 @@ for o in open.iter() {
     
     remaining_target -= adj;
     
-    let adj_amount = -adj; // negative value to write
+    let adj_amount = adj; // open amount, always positive
 
     let partial_note = if is_target_partial || (adj + 1e-9) < o.original {
         Some(format!(
@@ -1845,7 +1994,7 @@ for o in open.iter() {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     let path = std::path::PathBuf::from(download_dir)
-        .join(format!("reimbursable_{}_{}.xlsx", safe_name, ts));
+        .join(format!("settlement_{}_{}.xlsx", safe_name, ts));
 
     // Workbook + formats (match normal exporter)
     let mut wb = Workbook::new();
@@ -1879,7 +2028,7 @@ for o in open.iter() {
     let mut current_row: u32 = 0;
 
     sheet
-        .write_string_with_format(current_row, 0, "Reimbursable report", &title_fmt)
+        .write_string_with_format(current_row, 0, "Settlement statement", &title_fmt)
         .map_err(|e| e.to_string())?;
     current_row += 1;
 
@@ -1888,6 +2037,14 @@ for o in open.iter() {
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &account_label)
+        .map_err(|e| e.to_string())?;
+    current_row += 1;
+
+    sheet
+        .write_string_with_format(current_row, 0, "Status", &label_fmt)
+        .map_err(|e| e.to_string())?;
+    sheet
+        .write_string(current_row, 1, &direction_label)
         .map_err(|e| e.to_string())?;
     current_row += 1;
 
@@ -1946,7 +2103,7 @@ for o in open.iter() {
     let mut col_widths: Vec<usize> = header_labels.iter().map(|s| s.chars().count()).collect();
 
     // Rows + single TOTAL at end
-    let mut total_outstanding = 0.0f64; // will be <= 0.0
+    let mut total_outstanding = 0.0f64; // open amount, >= 0.0
 
     for (r_idx, row) in rows.iter().enumerate() {
         let rownum = table_start_row + 1 + r_idx as u32;
@@ -2023,7 +2180,7 @@ for o in open.iter() {
     let label_col: u16 = 0;
 
     sheet
-        .write_string_with_format(total_row, label_col, "Total", &label_fmt)
+        .write_string_with_format(total_row, label_col, "Open amount", &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_number_with_format(
@@ -2049,7 +2206,7 @@ for o in open.iter() {
 }
 
 #[tauri::command]
-async fn export_reimbursable_report_pdf(
+async fn export_settlement_report_pdf(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
@@ -2063,9 +2220,14 @@ async fn export_reimbursable_report_pdf(
 
     let acc_id = filters
         .account_id
-        .ok_or("Filter to a reimbursable account first")?;
-    let (account_label, _current_balance, carry_at_cut, items_oldest) =
-        compute_reimbursable_slice(&pool, acc_id).await?;
+        .ok_or("Filter to a person account first")?;
+    let (account_label, _current_balance, they_owe, carry_at_cut, items_oldest) =
+        compute_settlement_slice(&pool, acc_id).await?;
+    let direction_label = if they_owe {
+        format!("{} owes you", account_label)
+    } else {
+        format!("You owe {}", account_label)
+    };
 
     // Columns
     let cols: Vec<String> = columns.unwrap_or_else(|| {
@@ -2159,7 +2321,7 @@ for o in open.iter() {
     }
     rows.push(RowRef {
         it: o.it,
-        adj_amount: -adj,
+        adj_amount: adj,
         desc,
     });
 }
@@ -2182,7 +2344,7 @@ for o in open.iter() {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     let path = std::path::PathBuf::from(download_dir)
-        .join(format!("reimbursable_{}_{}.pdf", safe_name, ts));
+        .join(format!("settlement_{}_{}.pdf", safe_name, ts));
 
     // PDF canvas setup
     let page_w = Mm(210.0);
@@ -2194,7 +2356,7 @@ for o in open.iter() {
     let content_w = page_w.0 - m_l.0 - m_r.0;
 
     let (doc, page_id, layer_id) =
-        PdfDocument::new("Reimbursable Report", page_w, page_h, "Layer 1");
+        PdfDocument::new("Settlement statement", page_w, page_h, "Layer 1");
 
     // fonts
     fn load_font(
@@ -2261,7 +2423,7 @@ for o in open.iter() {
     draw_text(
         &layer_ref,
         &font_bold,
-        "Reimbursable report (open window)",
+        "Settlement statement (open items)",
         m_l.0,
         y,
         fs_title,
@@ -2272,6 +2434,16 @@ for o in open.iter() {
         &layer_ref,
         &font_normal,
         &format!("Account: {}", account_label),
+        m_l.0,
+        y,
+        fs_meta,
+        black(),
+    );
+    y -= row_h;
+    draw_text(
+        &layer_ref,
+        &font_normal,
+        &format!("Status: {}", direction_label),
         m_l.0,
         y,
         fs_meta,
@@ -2414,7 +2586,7 @@ for o in open.iter() {
         Some((grid(), 0.3)),
     );
 
-    let label = "Total";
+    let label = "Open amount";
     let value = format!("{} €", format_amount_eu(total_outstanding));
     draw_text(
         &layer_ref,
@@ -2624,12 +2796,40 @@ fn map_notadb(err_text: &str, db_path: &str) -> String {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct OpenDatabaseResult {
+    /// True when the file was upgraded to a newer schema during this open.
+    migrated: bool,
+    /// Copy of the file taken right before the upgrade, if one was made.
+    backup_path: Option<String>,
+}
+
+/// `<dir>/<stem>.backup-before-0002.<ext>`, with a timestamp suffix if that name is taken.
+fn backup_file_path(db_path: &str, target_version: i64) -> std::path::PathBuf {
+    let p = Path::new(db_path);
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "database".into());
+    let ext = p
+        .extension()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "db".into());
+    let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let base = dir.join(format!("{stem}.backup-before-{target_version:04}.{ext}"));
+    if !base.exists() {
+        return base;
+    }
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    dir.join(format!("{stem}.backup-before-{target_version:04}-{ts}.{ext}"))
+}
+
 #[tauri::command]
 async fn open_database(
     state: State<'_, AppState>,
     db_path: String,
     passphrase: String,
-) -> Result<(), String> {
+) -> Result<OpenDatabaseResult, String> {
     if !Path::new(&db_path).exists() {
         return Err("The selected file does not exist.".into());
     }
@@ -2656,12 +2856,42 @@ async fn open_database(
         .execute(&pool)
         .await;
 
-    // Migrate and swap in
-    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
-        return Err(e.to_string());
-    }
+    // Back up the file before applying a schema upgrade, then migrate and swap in.
+    let result = upgrade_if_needed(&pool, &db_path).await?;
     *state.pool.write().await = pool;
-    Ok(())
+    Ok(result)
+}
+
+/// Apply pending migrations. When the file is on an older schema, copy it next to
+/// itself first so the user can always go back to the previous version's data.
+async fn upgrade_if_needed(pool: &SqlitePool, db_path: &str) -> Result<OpenDatabaseResult, String> {
+    let migrator = sqlx::migrate!("./migrations");
+    let latest = migrator.iter().map(|m| m.version).max().unwrap_or(0);
+    let applied: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    let needs_upgrade = applied > 0 && applied < latest;
+    let mut backup_path: Option<String> = None;
+    if needs_upgrade {
+        // Fold the WAL into the main file so a plain copy is complete.
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE);")
+            .execute(pool)
+            .await;
+        let bp = backup_file_path(db_path, latest);
+        std::fs::copy(db_path, &bp).map_err(|e| {
+            format!("Could not create a backup before upgrading the database: {e}")
+        })?;
+        backup_path = Some(bp.to_string_lossy().to_string());
+    }
+    if let Err(e) = migrator.run(pool).await {
+        return Err(format!("Database upgrade failed: {e}"));
+    }
+    Ok(OpenDatabaseResult {
+        migrated: needs_upgrade,
+        backup_path,
+    })
 }
 
 #[tauri::command]
@@ -2796,7 +3026,7 @@ pub fn run() {
             delete_account, update_account,
             list_categories, add_category, update_category, delete_category,
             search_transactions, export_transactions_xlsx, export_transactions_pdf,
-            export_reimbursable_report_xlsx, export_reimbursable_report_pdf,
+            export_settlement_report_xlsx, export_settlement_report_pdf, add_transfer,
             list_transactions_all, is_database_open, system_prefers_dark
         ])
         .run(tauri::generate_context!())
@@ -2804,3 +3034,305 @@ pub fn run() {
 }
 
 fn main() { run(); }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// Fresh scratch database file; unique across parallel tests.
+    async fn temp_pool() -> (SqlitePool, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "assettracker-test-{}-{seq}-{nanos}.db",
+            std::process::id()
+        ));
+        let opts = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        (pool, path)
+    }
+
+    /// Apply migrations up to and including `version` (so a test can seed legacy data first).
+    async fn migrate_up_to(pool: &SqlitePool, version: i64) {
+        let mut m = sqlx::migrate!("./migrations");
+        let subset: Vec<sqlx::migrate::Migration> =
+            m.iter().filter(|x| x.version <= version).cloned().collect();
+        m.migrations = Cow::Owned(subset);
+        m.run(pool).await.unwrap();
+    }
+
+    async fn insert_account(pool: &SqlitePool, name: &str, ty: &str) -> i64 {
+        sqlx::query("INSERT INTO accounts (name, type) VALUES (?1, ?2)")
+            .bind(name)
+            .bind(ty)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid()
+    }
+
+    async fn insert_tx(
+        pool: &SqlitePool,
+        account_id: i64,
+        date: &str,
+        desc: Option<&str>,
+        amount: f64,
+        category: Option<&str>,
+    ) -> i64 {
+        let cat_id = get_or_create_category_id(pool, category.map(|s| s.to_string()))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(account_id)
+        .bind(date)
+        .bind(desc)
+        .bind(amount)
+        .bind(cat_id)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    async fn amount_of(pool: &SqlitePool, id: i64) -> f64 {
+        sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    async fn transfer_id_of(pool: &SqlitePool, id: i64) -> Option<i64> {
+        sqlx::query_scalar::<_, Option<i64>>("SELECT transfer_id FROM transactions WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    async fn category_of(pool: &SqlitePool, id: i64) -> Option<String> {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT c.name FROM transactions t LEFT JOIN categories c ON c.id = t.category_id WHERE t.id = ?1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+    async fn type_of(pool: &SqlitePool, account_id: i64) -> String {
+        sqlx::query_scalar("SELECT type FROM accounts WHERE id = ?1")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    async fn balance_of(pool: &SqlitePool, account_id: i64) -> f64 {
+        sqlx::query_scalar("SELECT COALESCE(SUM(amount), 0.0) FROM transactions WHERE account_id = ?1")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    fn close(x: f64, y: f64) -> bool {
+        (x - y).abs() < 1e-9
+    }
+
+    #[tokio::test]
+    async fn migration_0002_converts_legacy_reimbursable_data() {
+        let (pool, path) = temp_pool().await;
+        migrate_up_to(&pool, 1).await;
+
+        let bank = insert_account(&pool, "Bank", "standard").await;
+        let anna = insert_account(&pool, "Anna", "reimbursable").await;
+        let cash = insert_account(&pool, "Cash", "standard").await;
+
+        // Legacy conventions: a reimbursable account holds mirrored entries with the
+        // same sign as the paying account; negative balance = they owe you.
+        let a = insert_tx(&pool, bank, "2025-01-10", Some("Ticket"), -30.0, Some("Food")).await;
+        let b = insert_tx(&pool, anna, "2025-01-10", Some("Ticket"), -30.0, Some("Food")).await;
+        let c = insert_tx(&pool, bank, "2025-02-01", Some("Paid back"), 30.0, Some("Reimbursement")).await;
+        let d = insert_tx(&pool, anna, "2025-02-01", Some("Paid back"), 30.0, Some("Reimbursement")).await;
+        let e = insert_tx(&pool, bank, "2025-03-01", Some("[Bank -> Cash]"), -100.0, Some("Transfer")).await;
+        let f = insert_tx(&pool, cash, "2025-03-01", Some("[Bank -> Cash]"), 100.0, Some("Transfer")).await;
+        let g = insert_tx(&pool, anna, "2025-03-05", Some("Initial balance"), -20.0, Some("Init")).await;
+        let h = insert_tx(&pool, bank, "2025-03-06", Some("Groceries"), -12.5, Some("Groceries")).await;
+        // a mirror-less entry on the reimbursable account (must stay a plain entry)
+        let i = insert_tx(&pool, anna, "2025-03-07", Some("Lunch"), -8.0, Some("Food")).await;
+        assert!(close(balance_of(&pool, anna).await, -28.0));
+
+        migrate_up_to(&pool, 2).await;
+
+        // account type and CHECK constraint
+        assert_eq!(type_of(&pool, anna).await, "person");
+        assert_eq!(type_of(&pool, bank).await, "standard");
+        assert!(sqlx::query("INSERT INTO accounts (name, type) VALUES ('X', 'reimbursable')")
+            .execute(&pool)
+            .await
+            .is_err());
+        let ben = insert_account(&pool, "Ben", "person").await;
+        assert_eq!(ben, 4, "autoincrement continues after the rebuild");
+
+        // natural sign on the person account: 28 owed to you
+        assert!(close(amount_of(&pool, b).await, 30.0));
+        assert!(close(amount_of(&pool, d).await, -30.0));
+        assert!(close(amount_of(&pool, g).await, 20.0));
+        assert!(close(amount_of(&pool, i).await, 8.0));
+        assert!(close(balance_of(&pool, anna).await, 28.0));
+        // standard accounts untouched
+        assert!(close(amount_of(&pool, a).await, -30.0));
+        assert!(close(amount_of(&pool, h).await, -12.5));
+
+        // mirrored pairs became linked transfers and keep what the money was for
+        assert_eq!(transfer_id_of(&pool, a).await, Some(a));
+        assert_eq!(transfer_id_of(&pool, b).await, Some(a));
+        assert_eq!(category_of(&pool, a).await.as_deref(), Some("Food"));
+        assert_eq!(category_of(&pool, b).await.as_deref(), Some("Food"));
+        assert_eq!(transfer_id_of(&pool, c).await, Some(c));
+        assert_eq!(transfer_id_of(&pool, d).await, Some(c));
+        assert_eq!(category_of(&pool, c).await.as_deref(), Some("Reimbursement"));
+        assert_eq!(category_of(&pool, d).await.as_deref(), Some("Reimbursement"));
+
+        // existing transfer legs got linked
+        assert_eq!(transfer_id_of(&pool, e).await, Some(e));
+        assert_eq!(transfer_id_of(&pool, f).await, Some(e));
+
+        // everything else is untouched
+        assert_eq!(transfer_id_of(&pool, g).await, None);
+        assert_eq!(category_of(&pool, g).await.as_deref(), Some("Init"));
+        assert_eq!(transfer_id_of(&pool, h).await, None);
+        assert_eq!(category_of(&pool, h).await.as_deref(), Some("Groceries"));
+        assert_eq!(transfer_id_of(&pool, i).await, None);
+        assert_eq!(category_of(&pool, i).await.as_deref(), Some("Food"));
+
+        // integrity: no dangling foreign keys, constraints still enforced
+        let fk_rows = sqlx::query("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap();
+        assert!(fk_rows.is_empty());
+        let ic: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&pool).await.unwrap();
+        assert_eq!(ic, "ok");
+        assert!(sqlx::query("DELETE FROM accounts WHERE id = ?1")
+            .bind(bank)
+            .execute(&pool)
+            .await
+            .is_err(), "ON DELETE RESTRICT still works after the rebuild");
+
+        // running the migrator again is a no-op
+        migrate_up_to(&pool, 2).await;
+        assert!(close(amount_of(&pool, b).await, 30.0));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn upgrade_backs_up_the_old_file_first() {
+        let (pool, path) = temp_pool().await;
+        migrate_up_to(&pool, 1).await;
+        let anna = insert_account(&pool, "Anna", "reimbursable").await;
+        insert_tx(&pool, anna, "2025-01-10", Some("Ticket"), -30.0, Some("Food")).await;
+
+        // A fresh file created by this version needs no upgrade and no backup.
+        let (pool_new, path_new) = temp_pool().await;
+        migrate_up_to(&pool_new, 2).await;
+        let r = upgrade_if_needed(&pool_new, &path_new.to_string_lossy()).await.unwrap();
+        assert!(!r.migrated);
+        assert!(r.backup_path.is_none());
+
+        // A 1.x file is copied next to itself, then converted.
+        let r = upgrade_if_needed(&pool, &path.to_string_lossy()).await.unwrap();
+        assert!(r.migrated);
+        let backup = r.backup_path.expect("backup path");
+        assert!(backup.ends_with(".backup-before-0002.db"), "{backup}");
+        assert!(std::path::Path::new(&backup).exists());
+        assert!(close(amount_of(&pool, 1).await, 30.0), "live file converted");
+
+        // The backup still has the old schema and the old sign.
+        let opts = SqliteConnectOptions::new().filename(&backup).create_if_missing(false);
+        let bpool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+        let old_type: String = sqlx::query_scalar("SELECT type FROM accounts WHERE id = 1").fetch_one(&bpool).await.unwrap();
+        assert_eq!(old_type, "reimbursable");
+        assert!(close(amount_of(&bpool, 1).await, -30.0));
+        let old_version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations").fetch_one(&bpool).await.unwrap();
+        assert_eq!(old_version, 1);
+
+        // Opening the upgraded file again is a no-op (no second backup).
+        let r = upgrade_if_needed(&pool, &path.to_string_lossy()).await.unwrap();
+        assert!(!r.migrated);
+        assert!(r.backup_path.is_none());
+
+        // A taken backup name gets a timestamp suffix instead of being overwritten.
+        let second = backup_file_path(&path.to_string_lossy(), 2);
+        assert_ne!(second.to_string_lossy(), backup);
+        assert!(second.to_string_lossy().contains(".backup-before-0002-"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path_new);
+        let _ = std::fs::remove_file(&backup);
+    }
+
+    #[tokio::test]
+    async fn transfers_are_linked_and_deleted_together() {
+        let (pool, path) = temp_pool().await;
+        migrate_up_to(&pool, 2).await;
+        let bank = insert_account(&pool, "Bank", "standard").await;
+        let anna = insert_account(&pool, "Anna", "person").await;
+
+        let ids = add_transfer_impl(
+            &pool,
+            &NewTransfer {
+                from_account_id: bank,
+                to_account_id: anna,
+                date: "2025-04-01".into(),
+                amount: 30.0,
+                description: Some("Ticket".into()),
+                category: Some("Food".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(close(amount_of(&pool, ids.from_id).await, -30.0));
+        assert!(close(amount_of(&pool, ids.to_id).await, 30.0));
+        assert_eq!(transfer_id_of(&pool, ids.from_id).await, Some(ids.from_id));
+        assert_eq!(transfer_id_of(&pool, ids.to_id).await, Some(ids.from_id));
+        // the category records what the money was for, on both legs
+        assert_eq!(category_of(&pool, ids.from_id).await.as_deref(), Some("Food"));
+        assert_eq!(category_of(&pool, ids.to_id).await.as_deref(), Some("Food"));
+        assert!(close(balance_of(&pool, anna).await, 30.0), "Anna owes 30");
+
+        // plain moves between accounts default to "Transfer"
+        let cash = insert_account(&pool, "Cash", "standard").await;
+        let plain = add_transfer_impl(
+            &pool,
+            &NewTransfer { from_account_id: bank, to_account_id: cash, date: "2025-04-02".into(), amount: 10.0, description: None, category: None },
+        )
+        .await
+        .unwrap();
+        assert_eq!(category_of(&pool, plain.from_id).await.as_deref(), Some("Transfer"));
+        assert!(delete_transaction_impl(&pool, plain.from_id).await.unwrap());
+
+        assert!(add_transfer_impl(
+            &pool,
+            &NewTransfer { from_account_id: bank, to_account_id: bank, date: "2025-04-01".into(), amount: 1.0, description: None, category: None }
+        )
+        .await
+        .is_err());
+
+        // deleting either leg removes both
+        assert!(delete_transaction_impl(&pool, ids.to_id).await.unwrap());
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0);
+
+        let _ = std::fs::remove_file(&path);
+    }
+}

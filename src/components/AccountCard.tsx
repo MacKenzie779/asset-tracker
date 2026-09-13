@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import Amount from './Amount';
 import IconButton from './IconButton';
-import { IconCheck, IconPencil, IconRefresh, IconTrash, IconX } from './icons';
+import PersonBalance from './PersonBalance';
+import { IconCheck, IconPencil, IconTrash, IconUser, IconX } from './icons';
 import type { Account } from '../types';
 
 const DEFAULT_COLOR = '#9ca3af';
@@ -22,6 +23,7 @@ export default function AccountCard({
   const [name, setName] = useState(account.name);
   const [color, setColor] = useState<string>(account.color ?? DEFAULT_COLOR);
   const [busy, setBusy] = useState(false);
+  const isPerson = account.type === 'person';
 
   // Pick up fresh values after a refresh while not editing.
   useEffect(() => {
@@ -53,7 +55,7 @@ export default function AccountCard({
 
   return (
     <div className="card p-4">
-      {/* Header row: color dot + name (+ reimbursable icon), actions on the right */}
+      {/* Header row: color dot + name (+ person badge), actions on the right */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-2">
           <span className="h-3.5 w-3.5 rounded-full shrink-0" style={{ backgroundColor: color }} aria-hidden="true" />
@@ -61,7 +63,7 @@ export default function AccountCard({
             <input
               className="input h-9 w-full"
               value={name}
-              aria-label="Account name"
+              aria-label={isPerson ? 'Person name' : 'Account name'}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') { e.preventDefault(); void commit(); }
@@ -70,15 +72,15 @@ export default function AccountCard({
               autoFocus
             />
           ) : (
-            <div className="flex items-center gap-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               <div className="font-medium truncate">{account.name}</div>
-              {account.type === 'reimbursable' && (
+              {isPerson && (
                 <span
-                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-                  title="Reimbursable account"
-                  aria-label="Reimbursable"
+                  className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-sky-100 px-1.5 text-[11px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                  title="Person: someone you settle up with"
                 >
-                  <IconRefresh className="h-3.5 w-3.5" />
+                  <IconUser className="h-3 w-3" />
+                  Person
                 </span>
               )}
             </div>
@@ -116,9 +118,15 @@ export default function AccountCard({
         </div>
       </div>
 
-      {/* Balance big under header; color by sign */}
-      <div className="mt-4 text-2xl font-semibold">
-        <Amount value={account.balance} hidden={hidden} colorBySign />
+      {/* Balance */}
+      <div className="mt-4">
+        {isPerson ? (
+          <PersonBalance balance={account.balance} hidden={hidden} size="lg" />
+        ) : (
+          <div className="text-2xl font-semibold">
+            <Amount value={account.balance} hidden={hidden} colorBySign />
+          </div>
+        )}
       </div>
     </div>
   );

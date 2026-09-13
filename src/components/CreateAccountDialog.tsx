@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import clsx from 'clsx';
-import type { NewAccount } from '../types';
+import type { AccountType, NewAccount } from '../types';
 import { formatDecimalDE, parseDecimal } from '../lib/number';
 import Modal from './Modal';
 
@@ -16,7 +16,7 @@ export default function CreateAccountDialog({
 }) {
   const [name, setName] = useState('');
   const [color, setColor] = useState('#3b82f6');
-  const [accountType, setAccountType] = useState<'standard' | 'reimbursable'>('standard');
+  const [accountType, setAccountType] = useState<AccountType>('standard');
 
   // stored as a string so the user can type EU format like "1.234,56"
   const [initialBalanceStr, setInitialBalanceStr] = useState<string>('');
@@ -35,6 +35,7 @@ export default function CreateAccountDialog({
     }
   }, [open]);
 
+  const isPerson = accountType === 'person';
   const amountInvalid = initialBalanceStr.trim() !== '' && parsedInit === null;
   const canSubmit = !busy && !!name.trim() && !amountInvalid;
 
@@ -66,49 +67,55 @@ export default function CreateAccountDialog({
   };
 
   return (
-    <Modal open={open} onClose={close} title="Create new account" size="lg" initialFocus={nameRef}>
+    <Modal open={open} onClose={close} title={isPerson ? 'Add a person' : 'Create new account'} size="lg" initialFocus={nameRef}>
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-12 gap-3">
+          {/* Type */}
+          <div className="col-span-12">
+            <span className="label">Type</span>
+            <div className="mt-1 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Account type">
+              <TypeOption
+                checked={!isPerson}
+                onSelect={() => setAccountType('standard')}
+                title="Account"
+                description="Your own money: bank, cash, savings."
+              />
+              <TypeOption
+                checked={isPerson}
+                onSelect={() => setAccountType('person')}
+                title="Person"
+                description="Someone you settle up with: lent, borrowed, paid for each other."
+              />
+            </div>
+          </div>
+
           {/* Name */}
-          <label className="col-span-12 flex flex-col gap-1">
+          <label className="col-span-8 flex flex-col gap-1">
             <span className="label">Name</span>
             <input
               ref={nameRef}
               className="input"
-              placeholder="Account name"
+              placeholder={isPerson ? 'e.g. Anna' : 'e.g. Checking account'}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </label>
 
           {/* Color */}
-          <label className="col-span-6 flex items-center gap-2">
+          <label className="col-span-4 flex flex-col gap-1">
             <span className="label">Color</span>
             <input
               type="color"
-              className="h-9 w-14 cursor-pointer rounded bg-transparent"
+              className="h-[42px] w-full cursor-pointer rounded-xl border border-neutral-300 bg-transparent p-1 dark:border-neutral-700"
               value={color}
               onChange={(e) => setColor(e.target.value)}
-              title="Account color"
+              title="Color"
             />
-          </label>
-
-          {/* Type */}
-          <label className="col-span-6 flex flex-col gap-1">
-            <span className="label">Type</span>
-            <select
-              className="input"
-              value={accountType}
-              onChange={(e) => setAccountType(e.target.value as 'standard' | 'reimbursable')}
-            >
-              <option value="standard">Standard</option>
-              <option value="reimbursable">Reimbursable</option>
-            </select>
           </label>
 
           {/* Initial balance — EU input */}
           <label className="col-span-12 flex flex-col gap-1">
-            <span className="label">Initial balance</span>
+            <span className="label">{isPerson ? 'Current balance' : 'Initial balance'}</span>
             <input
               type="text"
               inputMode="decimal"
@@ -122,7 +129,11 @@ export default function CreateAccountDialog({
               aria-invalid={amountInvalid || undefined}
               title={amountInvalid ? 'Enter an amount like 1.234,56' : undefined}
             />
-            <p className="text-xs text-neutral-500">This will create an initial transaction</p>
+            <p className="text-xs text-neutral-500">
+              {isPerson
+                ? 'Positive if they already owe you, negative if you owe them. Recorded as an initial entry.'
+                : 'This will create an initial transaction.'}
+            </p>
             {amountInvalid && (
               <p className="text-xs text-rose-600 dark:text-rose-400">Wrong format. Example: 1.234,56</p>
             )}
@@ -134,10 +145,40 @@ export default function CreateAccountDialog({
             Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-            {busy ? 'Creating…' : 'Create'}
+            {busy ? 'Creating…' : isPerson ? 'Add person' : 'Create'}
           </button>
         </div>
       </form>
     </Modal>
+  );
+}
+
+function TypeOption({
+  checked,
+  onSelect,
+  title,
+  description,
+}: {
+  checked: boolean;
+  onSelect: () => void;
+  title: string;
+  description: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className={clsx(
+        'rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+        checked
+          ? 'border-blue-600 bg-blue-50 dark:border-blue-500 dark:bg-blue-950/30'
+          : 'border-neutral-300/60 hover:bg-neutral-100 dark:border-neutral-700/60 dark:hover:bg-neutral-800'
+      )}
+    >
+      <div className="text-sm font-medium">{title}</div>
+      <div className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">{description}</div>
+    </button>
   );
 }

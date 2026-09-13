@@ -4,7 +4,7 @@ import Amount from '../Amount';
 import IconButton from '../IconButton';
 import CategorySelect from '../CategorySelect';
 import AccountSelect from '../AccountSelect';
-import { IconCheck, IconPencil, IconTrash, IconX } from '../icons';
+import { IconCheck, IconLink, IconPencil, IconTrash, IconX } from '../icons';
 import { useToast } from '../Toast';
 import { formatDate, parseDateDEToISO } from '../../lib/format';
 import { formatDecimalDE, parseDecimal } from '../../lib/number';
@@ -31,6 +31,7 @@ export default function EditableTransactionRow({
   onUpdate,
 }: EditableTransactionRowProps) {
   const toast = useToast();
+  const linked = row.transfer_id != null;
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
@@ -79,6 +80,7 @@ export default function EditableTransactionRow({
     if (Number.isFinite(amt) && amt !== row.amount) patch.amount = amt;
     if (accountId !== row.account_id) patch.account_id = accountId;
 
+    // Category applies to both legs of a linked transfer (the backend syncs it).
     const prevCat = row.category ?? '';
     const catTrim = (category ?? '').trim();
     if (catTrim !== prevCat) patch.category = catTrim || null;
@@ -111,6 +113,17 @@ export default function EditableTransactionRow({
     }
   };
 
+  const linkBadge = linked ? (
+    <span
+      className="inline-flex shrink-0 text-neutral-400"
+      role="img"
+      aria-label="Linked transfer"
+      title="Linked transfer: date, notes, category and amount apply to both sides"
+    >
+      <IconLink className="h-3.5 w-3.5" />
+    </span>
+  ) : null;
+
   return (
     <tr
       onKeyDown={onKeyDown}
@@ -136,12 +149,18 @@ export default function EditableTransactionRow({
         )}
       </td>
 
-      {/* Category */}
+      {/* Category (a linked transfer keeps what the money was for; the badge marks the link) */}
       <td className="align-middle" style={{ width: 200 }}>
         {editing ? (
-          <CategorySelect className="input h-8 w-full" value={category} onChange={setCategory} />
+          <div className="flex items-center gap-1.5">
+            {linkBadge}
+            <CategorySelect className="input h-8 w-full" value={category} onChange={setCategory} />
+          </div>
         ) : (
-          row.category || '—'
+          <span className="inline-flex items-center gap-1.5">
+            {linkBadge}
+            <span>{row.category || '—'}</span>
+          </span>
         )}
       </td>
 
@@ -215,7 +234,11 @@ export default function EditableTransactionRow({
                 </IconButton>
               )}
               {onDelete && (
-                <IconButton label="Delete" tone="danger" onClick={() => onDelete(row.id)}>
+                <IconButton
+                  label={linked ? 'Delete transfer (both sides)' : 'Delete'}
+                  tone="danger"
+                  onClick={() => onDelete(row.id)}
+                >
                   <IconTrash />
                 </IconButton>
               )}

@@ -9,8 +9,8 @@ import {
   updateTransaction,
   exportTransactionsXlsx,
   exportTransactionsPdf,
-  exportReimbursableReportXlsx,
-  exportReimbursableReportPdf,
+  exportSettlementReportXlsx,
+  exportSettlementReportPdf,
 } from '../lib/api';
 
 import type {
@@ -123,7 +123,7 @@ export default function Transactions() {
 
   const [exportFmt, setExportFmt] = useState<'xlsx' | 'pdf'>('xlsx');
   const [exporting, setExporting] = useState(false);
-  const [reimbursableTarget, setReimbursableTarget] = useState<string>('');
+  const [settlementTarget, setSettlementTarget] = useState<string>('');
 
   const { hidden } = useOutletContext<LayoutOutletContext>();
   const accounts = useAccounts();
@@ -148,6 +148,8 @@ export default function Transactions() {
     offset: 0,            // server-computed effective offset
     sum_income: 0,
     sum_expense: 0,
+    sum_init: 0,
+    sum_transfer: 0,
   });
 
   const [confirmTxId, setConfirmTxId] = useState<number | null>(null);
@@ -167,43 +169,22 @@ export default function Transactions() {
     [data.total, limit]
   );
 
-  /* ----- current selected account (for reimbursable export button state) ----- */
+  /* ----- current selected account (settlement statement is per person) ----- */
   const selectedAccount = useMemo(
     () => accounts.find(a => a.id === (account_id ?? -1)) ?? null,
     [accounts, account_id]
   );
-  const isReimbursableSelected = selectedAccount?.type === 'reimbursable';
+  const isPersonSelected = selectedAccount?.type === 'person';
 
   // All-accounts view?
   const isAllAccounts = !account_id;
 
-  // Compute adjusted global totals from backend-provided global sums.
-  // Flip sign for reimbursable amounts to avoid double-counting net worth.
-  const adjustedGlobal = useMemo(() => {
-    const si = data.sum_income_std ?? 0;
-    const se = data.sum_expense_std ?? 0;   // negative
-    const ri = data.sum_income_reimb ?? 0;  // positive
-    const re = data.sum_expense_reimb ?? 0; // negative
-    const init = data.sum_init ?? 0;
-
-    // Flip reimbursable flows to avoid double-counting net worth
-    const income  = si + (-re);
-    const expense = se + (-ri);
-    const saldo   = income + expense + init;
-    return { income, expense, saldo };
-  }, [
-    data.sum_income_std,
-    data.sum_expense_std,
-    data.sum_income_reimb,
-    data.sum_expense_reimb,
-    data.sum_init,
-  ]);
-
-  const showIncome  = isAllAccounts ? adjustedGlobal.income  : (data.sum_income || 0);
-  const showExpense = isAllAccounts ? adjustedGlobal.expense : (data.sum_expense || 0);
-  const showSaldo = isAllAccounts
-    ? adjustedGlobal.saldo
-    : ((data.sum_income ?? 0) + (data.sum_expense ?? 0) + (data.sum_init ?? 0));
+  // Summary. Income/expense exclude transfers and initial balances (backend).
+  // For a single account the transfers in and out are part of its balance change.
+  const showIncome  = data.sum_income ?? 0;
+  const showExpense = data.sum_expense ?? 0;
+  const showTransfer = isAllAccounts ? 0 : (data.sum_transfer ?? 0);
+  const showSaldo = showIncome + showExpense + (data.sum_init ?? 0) + showTransfer;
 
   const currentPayload = (): TransactionSearch => ({
     limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
@@ -261,13 +242,15 @@ export default function Transactions() {
     await refresh();
   };
 
+  const pendingRow = confirmTxId != null ? data.items.find(t => t.id === confirmTxId) : undefined;
   const confirmDeleteTx = async () => {
     if (confirmTxId == null) return;
     const id = confirmTxId;
+    const linked = pendingRow?.transfer_id != null;
     setConfirmTxId(null);
     try {
       await mutate(() => deleteTransaction(id), {
-        success: 'Transaction deleted',
+        success: linked ? 'Transfer deleted (both sides)' : 'Transaction deleted',
         error: 'Could not delete transaction',
       });
       await refresh();
@@ -357,10 +340,10 @@ export default function Transactions() {
     }
   };
 
-  // --- Export reimbursable report (only when filtered to reimbursable account) ---
-  const handleExportReimbursable = async () => {
-    if (!account_id || !isReimbursableSelected) {
-      toast.info('Filter to a reimbursable account first');
+  // --- Settlement statement (only when filtered to a person) ---
+  const handleExportSettlement = async () => {
+    if (!account_id || !isPersonSelected) {
+      toast.info('Filter to a person first');
       return;
     }
     if (noColumns) {
@@ -369,24 +352,24 @@ export default function Transactions() {
     }
     setExporting(true);
     try {
-      // We pass current filters; the backend will enforce reimbursable mode and ignore date/query for the slice.
+      // We pass current filters; the backend only uses the account and ignores date/query for the statement.
       const common = currentPayload();
-      const targetVal = parseDecimal(reimbursableTarget);
+      const targetVal = parseDecimal(settlementTarget);
       const target = targetVal !== null && targetVal > 0 ? targetVal : undefined;
 
       const path =
         exportFmt === 'pdf'
-          ? await exportReimbursableReportPdf(common, exportCols, target)
-          : await exportReimbursableReportXlsx(common, exportCols, target);
+          ? await exportSettlementReportPdf(common, exportCols, target)
+          : await exportSettlementReportXlsx(common, exportCols, target);
       notifyExportSaved(path);
     } catch (e) {
-      toast.error('Reimbursable export failed', { description: errorMessage(e) });
+      toast.error('Settlement export failed', { description: errorMessage(e) });
     } finally {
       setExporting(false);
     }
   };
 
-  const reimbursableDisabled = !account_id || !isReimbursableSelected;
+  const settlementDisabled = !account_id || !isPersonSelected;
 
   // ----- pagination helpers -----
   const goToPage = (p: number) => {
@@ -603,8 +586,14 @@ export default function Transactions() {
               <span className="text-neutral-500">Total expenses</span>
               <Amount value={showExpense} hidden={hidden} />
             </div>
-            <div className="flex items-center gap-2 font-medium">
-              <span className="text-neutral-500">Saldo</span>
+            {!isAllAccounts && Math.abs(showTransfer) > 0.005 && (
+              <div className="flex items-center gap-2" title="Transfers into and out of this account">
+                <span className="text-neutral-500">Transfers</span>
+                <Amount value={showTransfer} hidden={hidden} />
+              </div>
+            )}
+            <div className="flex items-center gap-2 font-medium" title={isAllAccounts ? 'Income plus expenses plus initial balances' : 'Change of this account’s balance in the filtered set'}>
+              <span className="text-neutral-500">{isAllAccounts ? 'Saldo' : 'Balance change'}</span>
               <Amount value={showSaldo} hidden={hidden} />
             </div>
           </div>
@@ -712,34 +701,37 @@ export default function Transactions() {
           {exporting ? 'Exporting…' : 'Export'}
         </button>
 
-        {/* Reimbursable report */}
+        {/* Settlement statement */}
         <div className="mt-4 border-t border-neutral-200 pt-4 dark:border-neutral-800">
-          <div className="mb-2 text-sm font-medium">Reimbursable report</div>
+          <div className="mb-1 text-sm font-medium">Settlement statement</div>
+          <p className="mb-2 text-xs text-neutral-500">
+            Open items with a person, oldest first, with what is still due.
+          </p>
           <div
             className="flex flex-col gap-2"
-            title={reimbursableDisabled ? 'Filter to a reimbursable account to enable' : undefined}
+            title={settlementDisabled ? 'Filter to a person to enable' : undefined}
           >
             <input
               type="text"
               inputMode="decimal"
-              placeholder="Target value € (optional)"
-              aria-label="Target value in euro (optional)"
+              placeholder="Target amount € (optional)"
+              aria-label="Target amount in euro (optional): stop listing items once this amount is reached"
               className="input w-full"
-              value={reimbursableTarget}
-              onChange={(e) => setReimbursableTarget(e.target.value)}
-              disabled={reimbursableDisabled}
+              value={settlementTarget}
+              onChange={(e) => setSettlementTarget(e.target.value)}
+              disabled={settlementDisabled}
             />
             <button
               className="btn w-full"
-              onClick={handleExportReimbursable}
-              disabled={exporting || reimbursableDisabled || noColumns}
+              onClick={handleExportSettlement}
+              disabled={exporting || settlementDisabled || noColumns}
             >
-              Export reimbursable report
+              Export settlement statement
             </button>
           </div>
-          {reimbursableDisabled && (
+          {settlementDisabled && (
             <p className="mt-2 text-xs text-neutral-500">
-              Filter to a reimbursable account to enable this report.
+              Filter to a person to enable the statement.
             </p>
           )}
         </div>
@@ -752,8 +744,12 @@ export default function Transactions() {
       {/* Delete confirmation */}
       <ConfirmDialog
         open={confirmTxId !== null}
-        title="Delete transaction?"
-        description="This action cannot be undone."
+        title={pendingRow?.transfer_id != null ? 'Delete transfer?' : 'Delete transaction?'}
+        description={
+          pendingRow?.transfer_id != null
+            ? 'Both sides of this transfer will be removed. This action cannot be undone.'
+            : 'This action cannot be undone.'
+        }
         confirmText="Delete"
         variant="danger"
         onCancel={() => setConfirmTxId(null)}

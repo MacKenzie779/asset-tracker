@@ -1,12 +1,18 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   Account, NewAccount, UpdateAccount,
-  Transaction, NewTransaction, UpdateTransaction,
+  Transaction, NewTransaction, UpdateTransaction, NewTransfer, TransferIds,
   TransactionSearch, TransactionSearchResult,
-  Category,
+  Category, OpenDatabaseResult,
 } from '../types';
 
 /* database session */
+export async function openDatabase(dbPath: string, passphrase: string): Promise<OpenDatabaseResult> {
+  return invoke<OpenDatabaseResult>('open_database', { dbPath, passphrase });
+}
+export async function createDatabase(dbPath: string, passphrase: string): Promise<void> {
+  return invoke<void>('create_database', { dbPath, passphrase });
+}
 export async function closeDatabase(): Promise<void> {
   return invoke<void>('close_database');
 }
@@ -36,8 +42,13 @@ export async function addTransaction(input: NewTransaction): Promise<number> {
 export async function updateTransaction(input: UpdateTransaction): Promise<boolean> {
   return invoke<boolean>('update_transaction', { input });
 }
+/** Deleting one leg of a transfer removes both. */
 export async function deleteTransaction(id: number): Promise<boolean> {
   return invoke<boolean>('delete_transaction', { id });
+}
+/** Writes both legs atomically and links them. */
+export async function addTransfer(input: NewTransfer): Promise<TransferIds> {
+  return invoke<TransferIds>('add_transfer', { input });
 }
 
 /* transactions (search + export) */
@@ -51,12 +62,12 @@ export async function exportTransactionsPdf(filters: TransactionSearch, columns?
   return invoke<string>('export_transactions_pdf', { filters, columns });
 }
 
-/* reimbursable window exports */
-export async function exportReimbursableReportXlsx(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
-  return invoke<string>('export_reimbursable_report_xlsx', { filters, columns, targetValue });
+/* settlement statement for a person account (open items, oldest first) */
+export async function exportSettlementReportXlsx(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
+  return invoke<string>('export_settlement_report_xlsx', { filters, columns, targetValue });
 }
-export async function exportReimbursableReportPdf(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
-  return invoke<string>('export_reimbursable_report_pdf', { filters, columns, targetValue });
+export async function exportSettlementReportPdf(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
+  return invoke<string>('export_settlement_report_pdf', { filters, columns, targetValue });
 }
 
 /* categories */

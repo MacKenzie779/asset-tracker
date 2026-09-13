@@ -1,7 +1,7 @@
 // src/pages/Login.tsx
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { createDatabase, openDatabase } from "../lib/api";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal";
 import { IconEye, IconEyeOff, IconPlus } from "../components/icons";
@@ -77,9 +77,13 @@ export default function Login() {
     setBusy(true);
     setErr("");
     try {
-      await invoke("open_database", { dbPath: path, passphrase: pw });
+      const result = await openDatabase(path, pw);
       sessionStorage.setItem("db_unlocked", "1");        // re-auth each launch
       localStorage.setItem("db_last_path", path);        // convenience only
+      if (result.migrated) {
+        // Home shows a one-time notice about the upgrade and the backup.
+        sessionStorage.setItem("db_upgrade_notice", JSON.stringify(result));
+      }
       nav("/");
     } catch (e: unknown) {
       setErr(errorMessage(e, "Could not open the database."));
@@ -95,7 +99,7 @@ export default function Login() {
     setCBusy(true);
     setCErr("");
     try {
-      await invoke("create_database", { dbPath: cPath, passphrase: cPw });
+      await createDatabase(cPath, cPw);
       sessionStorage.setItem("db_unlocked", "1");
       localStorage.setItem("db_last_path", cPath);
       setCreateOpen(false);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import clsx from 'clsx';
 import {
   listAccounts,
   listTransactionsAll,
@@ -8,7 +9,15 @@ import {
 import type { Account } from '../types';
 import type { TxMini } from '../lib/api';
 import Amount from '../components/Amount';
+import PageContainer from '../components/PageContainer';
+import Skeleton from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import type { LayoutOutletContext } from '../components/Layout';
+import { useTheme } from '../hooks/useTheme';
+import { chartTheme } from '../lib/theme';
+import { errorMessage } from '../lib/errors';
+import { formatDate } from '../lib/format';
+import { formatMoneyDE } from '../lib/number';
 
 // Recharts
 import {
@@ -17,18 +26,34 @@ import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Brush,
 } from 'recharts';
 
+type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null };
+type GroupBy = 'monthly' | 'yearly';
+type Range = '6m' | '12m' | '24m' | '36m' | 'ytd' | 'all';
+
+// consistent colour (prefer account.color)
+const FALLBACK_COLORS = ['#2563eb', '#16a34a', '#ea580c', '#db2777', '#0891b2', '#ca8a04', '#7c3aed', '#ef4444'];
+const colorFor = (idx: number, hex?: string | null) => hex || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
+
+// Internal bookkeeping categories that must not pollute spending analytics.
+const EXCLUDED_CATEGORIES = new Set(['transfer', 'transfers', 'init', 'korrektur']);
+const EXCLUDED_NOTE = 'Transfers and initial balances excluded';
+const EXCLUDED_TITLE = 'Excluded categories: Transfer, Transfers, Init, Korrektur';
+
 export default function Stats() {
   const { hidden } = useOutletContext<LayoutOutletContext>();
+  const toast = useToast();
+  const { resolved } = useTheme();
+  const t = useMemo(() => chartTheme(resolved), [resolved]);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txAll, setTxAll] = useState<TxMini[]>([]);
   const [loading, setLoading] = useState(true);
-  type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null };
   const [txCatItems, setTxCatItems] = useState<TxExt[]>([]);
+  const [catLoading, setCatLoading] = useState(true);
 
   // controls
-  const [groupBy, setGroupBy] = useState<'monthly' | 'yearly'>('monthly');
-  const [range, setRange] = useState<'6m' | '12m' | '24m' | '36m' | 'ytd' | 'all'>('12m');
+  const [groupBy, setGroupBy] = useState<GroupBy>('monthly');
+  const [range, setRange] = useState<Range>('12m');
   const [showIndividualAccounts, setShowIndividualAccounts] = useState(false);
 
   // quick helper (month start/end)
@@ -45,53 +70,57 @@ export default function Stats() {
         ]);
         setAccounts(acc);
         setTxAll(tx);
+      } catch (e) {
+        toast.error('Could not load statistics', { description: errorMessage(e) });
       } finally {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-  (async () => {
-    try {
-      const pageSize = 1000;
-      let offset = 0;
-      const all: TxExt[] = [];
-      while (true) {
-        const res = await searchTransactions({
-          tx_type: 'all', // fetch all to do both income and expenses
-          limit: pageSize,
-          offset,
-          sort_by: 'id',
-          sort_dir: 'asc',
-        });
-        const items = (res.items ?? []) as any[];
-        all.push(...items.map(it => ({ 
-          id: it.id, 
-          date: it.date, 
-          amount: it.amount, 
-          category: it.category,
-          description: it.description 
-        })));
-        const total: number = (res as any).total ?? items.length;
-        offset += pageSize;
-        if (offset >= total) break;
+    (async () => {
+      setCatLoading(true);
+      try {
+        const pageSize = 1000;
+        let offset = 0;
+        const all: TxExt[] = [];
+        while (true) {
+          const res = await searchTransactions({
+            tx_type: 'all', // fetch all to do both income and expenses
+            limit: pageSize,
+            offset,
+            sort_by: 'id',
+            sort_dir: 'asc',
+          });
+          const items = (res.items ?? []) as any[];
+          all.push(...items.map(it => ({
+            id: it.id,
+            date: it.date,
+            amount: it.amount,
+            category: it.category,
+            description: it.description
+          })));
+          const total: number = (res as any).total ?? items.length;
+          offset += pageSize;
+          if (offset >= total) break;
+        }
+        setTxCatItems(all);
+      } catch (e) {
+        console.error('fetch categories failed', e);
+        toast.error('Could not load category statistics', { description: errorMessage(e) });
+        setTxCatItems([]);
+      } finally {
+        setCatLoading(false);
       }
-      setTxCatItems(all);
-    } catch (e) {
-      console.error('fetch categories failed', e);
-      setTxCatItems([]);
-    }
-  })();
-}, []);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* =========================
      Derived values / helpers
      ========================= */
-
-  // consistent color (prefer account.color)
-  const fallbackColors = ['#2563eb','#16a34a','#ea580c','#db2777','#0891b2','#ca8a04','#7c3aed','#ef4444'];
-  const colorFor = (idx: number, hex?: string | null) => hex || fallbackColors[idx % fallbackColors.length];
 
   // Net worth pie (reimbursables inverted)
   const pieData = useMemo(() => {
@@ -110,7 +139,7 @@ export default function Stats() {
       .reduce((sum, a) => sum + (a.balance < 0 ? -a.balance : 0), 0);
   }, [accounts]);
 
-  // Monthly net for current month (backend sums exclude transfers if you applied the earlier tweak)
+  // Monthly net for current month (backend sums exclude transfers)
   const [monthNet, setMonthNet] = useState<number>(0);
   useEffect(() => {
     (async () => {
@@ -156,10 +185,10 @@ export default function Stats() {
 
     // pre-bucket transactions by group key
     const buckets: Record<string, TxMini[]> = {};
-    for (const t of txAll) {
-      const d = parseISO(t.date);
+    for (const tx of txAll) {
+      const d = parseISO(tx.date);
       const k = groupKey(d);
-      (buckets[k] ||= []).push(t);
+      (buckets[k] ||= []).push(tx);
     }
     // ensure buckets are date asc (they already are in txAll asc, but safe)
     for (const k of Object.keys(buckets)) {
@@ -168,13 +197,12 @@ export default function Stats() {
 
     // accumulate through groups
     const rows: any[] = [];
-    let seenKeys: string[] = [];
 
     for (const key of allKeys) {
       const txs = buckets[key] || [];
       // apply all tx in this group
-      for (const t of txs) {
-        run[t.account_id] = (run[t.account_id] || 0) + t.amount;
+      for (const tx of txs) {
+        run[tx.account_id] = (run[tx.account_id] || 0) + tx.amount;
       }
 
       // snapshot at group end
@@ -192,7 +220,6 @@ export default function Stats() {
       }, 0);
 
       rows.push(point);
-      seenKeys.push(key);
     }
 
     // reduce to chosen range
@@ -200,6 +227,7 @@ export default function Stats() {
     const filtered = cutoffKeys.map(k => byKey.get(k)!).filter(Boolean);
 
     return { keys: cutoffKeys, data: filtered };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, txAll, groupBy, range]);
 
   // Lines config for accounts
@@ -235,41 +263,39 @@ export default function Stats() {
   );
 
   // ==== Categories & Exclusions ====
-  const excludedCategories = useMemo(() => new Set(['transfer', 'transfers', 'init', 'korrektur']), []);
-
   const expensesByCategory = useMemo(() => {
     const sums = new Map<string, number>();
-    for (const t of txCatItems) {
-      if (t.amount >= 0) continue; // Only expenses
-      const name = (t.category ?? 'Uncategorized').toString();
+    for (const tx of txCatItems) {
+      if (tx.amount >= 0) continue; // Only expenses
+      const name = (tx.category ?? 'Uncategorized').toString();
       const lc = name.toLowerCase();
-      if (excludedCategories.has(lc)) continue;
-      const v = Math.abs(t.amount);
+      if (EXCLUDED_CATEGORIES.has(lc)) continue;
+      const v = Math.abs(tx.amount);
       if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
     }
     const rows = Array.from(sums.entries())
-      .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
+      .map(([name, value], i) => ({ name, value, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length] }))
       .sort((a, b) => b.value - a.value);
     const total = rows.reduce((s, r) => s + r.value, 0);
     return { rows, total };
-  }, [txCatItems, excludedCategories, fallbackColors]);
+  }, [txCatItems]);
 
   const incomeByCategory = useMemo(() => {
     const sums = new Map<string, number>();
-    for (const t of txCatItems) {
-      if (t.amount <= 0) continue; // Only income
-      const name = (t.category ?? 'Uncategorized').toString();
+    for (const tx of txCatItems) {
+      if (tx.amount <= 0) continue; // Only income
+      const name = (tx.category ?? 'Uncategorized').toString();
       const lc = name.toLowerCase();
-      if (excludedCategories.has(lc)) continue;
-      const v = t.amount;
+      if (EXCLUDED_CATEGORIES.has(lc)) continue;
+      const v = tx.amount;
       if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
     }
     const rows = Array.from(sums.entries())
-      .map(([name, value], i) => ({ name, value, color: fallbackColors[i % fallbackColors.length] }))
+      .map(([name, value], i) => ({ name, value, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length] }))
       .sort((a, b) => b.value - a.value);
     const total = rows.reduce((s, r) => s + r.value, 0);
     return { rows, total };
-  }, [txCatItems, excludedCategories, fallbackColors]);
+  }, [txCatItems]);
 
   // Savings rate
   const totalIncome = incomeByCategory.total;
@@ -279,10 +305,10 @@ export default function Stats() {
   // Top 5 Expenses
   const topExpenses = useMemo(() => {
     return [...txCatItems]
-      .filter(t => t.amount < 0 && !excludedCategories.has((t.category ?? '').toLowerCase()))
+      .filter(tx => tx.amount < 0 && !EXCLUDED_CATEGORIES.has((tx.category ?? '').toLowerCase()))
       .sort((a, b) => a.amount - b.amount) // smaller negative value means larger expense
       .slice(0, 5);
-  }, [txCatItems, excludedCategories]);
+  }, [txCatItems]);
 
   // Income vs Expenses over time (Bar Chart)
   const incExpSeries = useMemo(() => {
@@ -304,15 +330,15 @@ export default function Stats() {
     const buckets: Record<string, { income: number, expense: number }> = {};
     for (const k of allKeys) buckets[k] = { income: 0, expense: 0 };
 
-    for (const t of txCatItems) {
-      const k = groupKey(parseISO(t.date));
+    for (const tx of txCatItems) {
+      const k = groupKey(parseISO(tx.date));
       if (!buckets[k]) continue;
 
-      const lc = (t.category ?? 'Uncategorized').toString().toLowerCase();
-      if (excludedCategories.has(lc)) continue;
+      const lc = (tx.category ?? 'Uncategorized').toString().toLowerCase();
+      if (EXCLUDED_CATEGORIES.has(lc)) continue;
 
-      if (t.amount > 0) buckets[k].income += t.amount;
-      else if (t.amount < 0) buckets[k].expense += Math.abs(t.amount);
+      if (tx.amount > 0) buckets[k].income += tx.amount;
+      else if (tx.amount < 0) buckets[k].expense += Math.abs(tx.amount);
     }
 
     return {
@@ -323,61 +349,81 @@ export default function Stats() {
         Expense: buckets[key].expense,
       }))
     };
-  }, [txCatItems, groupBy, range, excludedCategories]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txCatItems, groupBy, range]);
+
+  // Shared chart chrome (theme-aware)
+  const axisProps = {
+    tick: { fill: t.tick, fontSize: 12 },
+    axisLine: { stroke: t.axis },
+    tickLine: { stroke: t.axis },
+  };
+  const tooltipStyle = {
+    contentStyle: t.tooltip,
+    itemStyle: { color: t.text },
+    labelStyle: { color: t.tick },
+  };
+
+  const kpiLoading = loading && accounts.length === 0;
 
   /* =========================
          UI
      ========================= */
   return (
-    <div className="mx-auto w-full max-w={[1680]}px px-6 py-4 grid gap-6">
+    <PageContainer className="grid gap-6">
       {/* Top cards */}
-      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
         <div className="card p-5">
           <p className="text-xs text-neutral-500">Total value</p>
-          <div className="mt-1 text-3xl md:text-4xl font-bold">
-            <Amount value={totalBalance} hidden={hidden} />
+          <div className="mt-1 text-3xl font-bold md:text-4xl">
+            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : <Amount value={totalBalance} hidden={hidden} />}
           </div>
-          <p className="text-xs text-neutral-500 mt-1">Reimbursables counted as receivables</p>
+          <p className="mt-1 text-xs text-neutral-500">Reimbursables counted as receivables</p>
         </div>
 
         <div className="card p-5">
           <p className="text-xs text-neutral-500">To be reimbursed</p>
-          <div className="mt-1 text-3xl md:text-4xl font-bold">
-            <Amount value={toBeReimbursed} hidden={hidden} />
+          <div className="mt-1 text-3xl font-bold md:text-4xl">
+            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : <Amount value={toBeReimbursed} hidden={hidden} />}
           </div>
         </div>
 
         <div className="card p-5">
           <p className="text-xs text-neutral-500">Net this month</p>
-          <div className="mt-1 text-3xl md:text-4xl font-bold">
+          <div className="mt-1 text-3xl font-bold md:text-4xl">
             <Amount value={monthNet} hidden={hidden} colorBySign />
           </div>
-          <p className="text-xs text-neutral-500 mt-1">Transfers excluded</p>
+          <p className="mt-1 text-xs text-neutral-500">Transfers excluded</p>
         </div>
 
         <div className="card p-5">
-          <p className="text-xs text-neutral-500">Avg Savings Rate</p>
-          <div className="mt-1 text-3xl md:text-4xl font-bold text-green-600 dark:text-green-500">
-            {hidden ? '***' : `${savingsRate.toFixed(1)}%`}
+          <p className="text-xs text-neutral-500">Avg savings rate</p>
+          <div
+            className={clsx(
+              'mt-1 text-3xl font-bold md:text-4xl',
+              savingsRate >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+            )}
+          >
+            {catLoading ? <Skeleton className="mt-1 h-9 w-28" /> : hidden ? '***' : `${savingsRate.toFixed(1).replace('.', ',')} %`}
           </div>
-          <p className="text-xs text-neutral-500 mt-1">Overall (Income vs Expenses)</p>
+          <p className="mt-1 text-xs text-neutral-500">Overall (income vs expenses)</p>
         </div>
       </section>
 
       {/* Top Expenses */}
       {topExpenses.length > 0 && (
         <section className="card p-5">
-          <h2 className="text-base font-semibold mb-3">Top Expenses (All time)</h2>
+          <h2 className="mb-3 text-base font-semibold">Top expenses (all time)</h2>
           <div className="grid gap-2">
-            {topExpenses.map((t, idx) => (
-              <div key={idx} className="flex justify-between items-center text-sm border-b border-neutral-200 dark:border-neutral-800 pb-2 last:border-0 last:pb-0">
-                <div>
-                  <span className="font-medium">{t.date}</span>
-                  <span className="text-neutral-500 ml-2">{t.category ?? 'Uncategorized'}</span>
-                  {t.description && <div className="text-xs text-neutral-400 mt-0.5">{t.description}</div>}
+            {topExpenses.map((tx) => (
+              <div key={tx.id} className="flex items-center justify-between gap-4 border-b border-neutral-200 pb-2 text-sm last:border-0 last:pb-0 dark:border-neutral-800">
+                <div className="min-w-0">
+                  <span className="font-medium tabular-nums">{formatDate(tx.date)}</span>
+                  <span className="ml-2 text-neutral-500">{tx.category ?? 'Uncategorized'}</span>
+                  {tx.description && <div className="mt-0.5 truncate text-xs text-neutral-400">{tx.description}</div>}
                 </div>
-                <div className="font-semibold text-red-600 dark:text-red-500">
-                  <Amount value={t.amount} hidden={hidden} />
+                <div className="shrink-0 font-semibold">
+                  <Amount value={tx.amount} hidden={hidden} />
                 </div>
               </div>
             ))}
@@ -385,104 +431,101 @@ export default function Stats() {
         </section>
       )}
 
-{/* Split by account (Pie) */}
-<section className="card p-5">
-  <div className="flex items-center justify-between">
-    <h2 className="text-base font-semibold">Total value split by account</h2>
-    {loading && <span className="text-xs text-neutral-500">Loading…</span>}
-  </div>
+      {/* Split by account (Pie) */}
+      <section className="card p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Total value split by account</h2>
+          {loading && <span className="text-xs text-neutral-500">Loading…</span>}
+        </div>
 
-  <div className="mt-3 w-full" style={{ height: 320 }}>
-    <ResponsiveContainer>
-      <PieChart>
-        <Pie
-          data={pieRowsVisible}
-          dataKey="value"
-          nameKey="name"
-          cx="50%"
-          cy="50%"
-          outerRadius={110}
-          label={({ name, percent }: { name?: string; percent?: number }) =>
-            `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-          }
-        >
-          {pieRowsVisible.map((r) => (
-            <Cell
-              key={r.id}
-              fill={r.color}
-              cursor="pointer"
-              onClick={() => toggleAcc(r.id)} // <-- toggle by clicking a slice
-            />
-          ))}
-        </Pie>
+        <div className="mt-3 w-full" style={{ height: 320 }}>
+          <ResponsiveContainer>
+            <PieChart>
+              <Pie
+                data={pieRowsVisible}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={110}
+                stroke={t.surface}
+                label={({ name, percent }: { name?: string; percent?: number }) =>
+                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
+                }
+              >
+                {pieRowsVisible.map((r) => (
+                  <Cell
+                    key={r.id}
+                    fill={r.color}
+                    cursor="pointer"
+                    onClick={() => toggleAcc(r.id)} // toggle by clicking a slice
+                  />
+                ))}
+              </Pie>
 
-        <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
-        {/* Remove the default Legend to avoid confusion; we render our own clickable chips below */}
-      </PieChart>
-    </ResponsiveContainer>
-  </div>
+              <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
 
-  {/* Clickable legend chips (independent toggles for the pie) */}
-  <div className="mt-3 flex flex-wrap gap-2">
-    {pieData.rows.map((r) => {
-      const hidden = isAccHidden(r.id);
-      return (
-        <button
-          key={r.id}
-          onClick={() => toggleAcc(r.id)}
-          className={[
-            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm transition",
-            hidden
-              ? "opacity-50 ring-1 ring-neutral-400 hover:opacity-70"
-              : "bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-          ].join(' ')}
-          title={hidden ? "Show account" : "Hide account"}
-        >
-          <span
-            className="inline-block h-3 w-3 rounded-sm"
-            style={{ background: r.color }}
-          />
-          <span className="whitespace-nowrap">{r.name}</span>
-        </button>
-      );
-    })}
-  </div>
+        {/* Clickable legend chips (independent toggles for the pie) */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {pieData.rows.map((r) => {
+            const isOff = isAccHidden(r.id);
+            return (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => toggleAcc(r.id)}
+                aria-pressed={!isOff}
+                className={clsx(
+                  'inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+                  isOff
+                    ? 'opacity-50 ring-1 ring-neutral-400 hover:opacity-70'
+                    : 'bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700'
+                )}
+                title={isOff ? 'Show account' : 'Hide account'}
+              >
+                <span className="inline-block h-3 w-3 rounded-sm" style={{ background: r.color }} aria-hidden="true" />
+                <span className="whitespace-nowrap">{r.name}</span>
+              </button>
+            );
+          })}
+        </div>
 
-  {/* Optional quick actions */}
-  {pieData.rows.length > 0 && (
-    <div className="mt-2 flex flex-wrap gap-2 text-xs">
-      <button
-        className="btn-secondary px-2 py-1"
-        onClick={() => {
-          // show all: clear the hidden set
-          setHiddenAcc(new Set());
-        }}
-      >
-        Show all
-      </button>
-      <button
-        className="btn-secondary px-2 py-1"
-        onClick={() => {
-          // hide all accounts that currently appear in the pie
-          setHiddenAcc(new Set(pieData.rows.map(r => r.id)));
-        }}
-      >
-        Hide all
-      </button>
-    </div>
-  )}
+        {/* Quick actions */}
+        {pieData.rows.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary h-7 px-2 text-xs"
+              onClick={() => setHiddenAcc(new Set())}
+            >
+              Show all
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary h-7 px-2 text-xs"
+              onClick={() => setHiddenAcc(new Set(pieData.rows.map(r => r.id)))}
+            >
+              Hide all
+            </button>
+          </div>
+        )}
 
-  {pieData.rows.length === 0 && (
-    <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
-  )}
-</section>
+        {!loading && pieData.rows.length === 0 && (
+          <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
+        )}
+      </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {/* Expenses by category (Pie) */}
         <div className="card p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold">Expenses by category</h2>
-            <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+            <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>
+              {catLoading ? 'Loading…' : EXCLUDED_NOTE}
+            </span>
           </div>
           <div className="mt-3 w-full" style={{ height: 320 }}>
             <ResponsiveContainer>
@@ -494,6 +537,7 @@ export default function Stats() {
                   cx="50%"
                   cy="50%"
                   outerRadius={110}
+                  stroke={t.surface}
                   label={({ name, percent }: { name?: string; percent?: number }) =>
                     `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
                   }
@@ -502,20 +546,22 @@ export default function Stats() {
                     <Cell key={idx} fill={r.color} />
                   ))}
                 </Pie>
-                <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+                <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
               </PieChart>
             </ResponsiveContainer>
           </div>
-          {expensesByCategory.rows.length === 0 && (
-            <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+          {!catLoading && expensesByCategory.rows.length === 0 && (
+            <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
           )}
         </div>
 
         {/* Income by category (Pie) */}
         <div className="card p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold">Income by category</h2>
-            <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+            <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>
+              {catLoading ? 'Loading…' : EXCLUDED_NOTE}
+            </span>
           </div>
           <div className="mt-3 w-full" style={{ height: 320 }}>
             <ResponsiveContainer>
@@ -527,6 +573,7 @@ export default function Stats() {
                   cx="50%"
                   cy="50%"
                   outerRadius={110}
+                  stroke={t.surface}
                   label={({ name, percent }: { name?: string; percent?: number }) =>
                     `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
                   }
@@ -535,32 +582,32 @@ export default function Stats() {
                     <Cell key={idx} fill={r.color} />
                   ))}
                 </Pie>
-                <RTooltip formatter={(v: any, n: any) => [fmtMoney(v), n]} />
+                <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
               </PieChart>
             </ResponsiveContainer>
           </div>
-          {incomeByCategory.rows.length === 0 && (
-            <p className="text-sm text-neutral-500 mt-2">Nothing to show yet.</p>
+          {!catLoading && incomeByCategory.rows.length === 0 && (
+            <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
           )}
         </div>
       </section>
 
       {/* Income vs Expenses over time */}
       <section className="card p-5">
-        <div className="flex items-center justify-between gap-3 mb-3">
-          <h2 className="text-base font-semibold">Income vs Expenses</h2>
-          <span className="text-xs text-neutral-500">Excluded cats hidden</span>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold">Income vs expenses</h2>
+          <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>{EXCLUDED_NOTE}</span>
         </div>
         <div className="w-full" style={{ height: 360 }}>
           <ResponsiveContainer>
             <BarChart data={incExpSeries.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="key" />
-              <YAxis tickFormatter={fmtMoneyShort} />
-              <RTooltip formatter={(v:any, n:any) => [fmtMoney(v), n]} labelFormatter={(l:any)=> l} />
-              <RLegend />
-              <Bar dataKey="Income" fill="#16a34a" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Expense" fill="#dc2626" radius={[4, 4, 0, 0]} />
+              <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
+              <XAxis dataKey="key" {...axisProps} />
+              <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
+              <RTooltip {...tooltipStyle} cursor={{ fill: t.cursor }} formatter={(v:any, n:any) => [fmtMoney(v), n]} labelFormatter={(l:any)=> l} />
+              <RLegend wrapperStyle={{ color: t.text }} />
+              <Bar dataKey="Income" fill={t.positive} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Expense" fill={t.negative} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -568,30 +615,32 @@ export default function Stats() {
 
       {/* Net worth over time (Lines) */}
       <section className="card p-5">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold">Value over time</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 text-sm select-none mr-2">
-              <input 
-                type="checkbox" 
+            <label className="mr-2 flex select-none items-center gap-2 text-sm">
+              <input
+                type="checkbox"
                 checked={showIndividualAccounts}
                 onChange={e => setShowIndividualAccounts(e.target.checked)}
               />
               Show individual accounts
             </label>
             <select
-              className="input"
+              className="input w-auto"
               value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as any)}
+              onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+              aria-label="Grouping"
               title="Grouping"
             >
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
             </select>
             <select
-              className="input"
+              className="input w-auto"
               value={range}
-              onChange={(e) => setRange(e.target.value as any)}
+              onChange={(e) => setRange(e.target.value as Range)}
+              aria-label="Range"
               title="Range"
             >
               <option value="6m">Last 6m</option>
@@ -608,14 +657,17 @@ export default function Stats() {
           <ResponsiveContainer>
             {showIndividualAccounts ? (
               <LineChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="key" />
-                <YAxis tickFormatter={fmtMoneyShort} />
+                <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
+                <XAxis dataKey="key" {...axisProps} />
+                <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
                 <RTooltip
+                  {...tooltipStyle}
+                  cursor={{ stroke: t.axis }}
                   formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
                   labelFormatter={(l:any)=> l}
                 />
                 <RLegend
+                  wrapperStyle={{ color: t.text }}
                   onClick={(entry: any) => {
                     const key = entry?.dataKey as string | undefined;
                     if (!key || key === 'total') return;
@@ -637,38 +689,41 @@ export default function Stats() {
                     hide={isAccHidden(l.id)}
                   />
                 ))}
-                {series.data.length > 20 && <Brush dataKey="key" height={20} />}
+                {series.data.length > 20 && <Brush dataKey="key" height={20} stroke={t.axis} fill={t.surface} />}
               </LineChart>
             ) : (
               <AreaChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#111827" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#111827" stopOpacity={0}/>
+                    <stop offset="5%" stopColor={t.accent} stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor={t.accent} stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="key" />
-                <YAxis tickFormatter={fmtMoneyShort} />
+                <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
+                <XAxis dataKey="key" {...axisProps} />
+                <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
                 <RTooltip
+                  {...tooltipStyle}
+                  cursor={{ stroke: t.axis }}
                   formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
                   labelFormatter={(l:any)=> l}
                 />
-                <Area 
-                  type="monotone" 
-                  dataKey="total" 
-                  name="Total Net Worth" 
-                  stroke="#111827" 
-                  fillOpacity={1} 
-                  fill="url(#colorTotal)" 
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  name="Total net worth"
+                  stroke={t.accent}
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#colorTotal)"
                 />
-                {series.data.length > 20 && <Brush dataKey="key" height={20} />}
+                {series.data.length > 20 && <Brush dataKey="key" height={20} stroke={t.axis} fill={t.surface} />}
               </AreaChart>
             )}
           </ResponsiveContainer>
         </div>
       </section>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -682,9 +737,6 @@ function iso(d: Date) {
 function parseISO(s: string) {
   const [y,m,d] = s.split('-').map(Number);
   return new Date(y, (m||1)-1, d||1);
-}
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth()+1, 0);
 }
 function enumerateGroups(from: Date, to: Date, groupBy: 'monthly'|'yearly') {
   const out: string[] = [];
@@ -702,17 +754,15 @@ function enumerateGroups(from: Date, to: Date, groupBy: 'monthly'|'yearly') {
   }
   return out;
 }
-// pretty money formatters (for tooltips/axis)
+// pretty money formatters (for tooltips/axis) — same de-DE / EUR convention as <Amount>
 function fmtMoney(v: number) {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v ?? 0);
-  } catch { return String(Math.round(v ?? 0)); }
+  return formatMoneyDE(v ?? 0, { maximumFractionDigits: 0 });
 }
 function fmtMoneyShort(v: number) {
   const n = Math.abs(v);
   const sign = v < 0 ? '-' : '';
-  if (n >= 1_000_000) return `${sign}${(n/1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${sign}${(n/1_000).toFixed(1)}k`;
+  if (n >= 1_000_000) return `${sign}${(n/1_000_000).toFixed(1).replace('.', ',')} M`;
+  if (n >= 1_000) return `${sign}${(n/1_000).toFixed(1).replace('.', ',')} k`;
   return `${sign}${Math.round(n)}`;
 }
 function legendName(key: string, accounts: Account[]) {

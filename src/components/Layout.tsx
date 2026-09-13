@@ -1,111 +1,242 @@
-import { Outlet, useLocation, Link } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { Outlet, useLocation, Link, useNavigate } from 'react-router-dom';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
+import clsx from 'clsx';
 import HideAmountsToggle from './HideAmountsToggle';
+import ThemeToggle from './ThemeToggle';
 import AppVersion from './AppVersion';
+import ShortcutsHelp from './ShortcutsHelp';
+import { useToast } from './Toast';
+import {
+  IconArrows,
+  IconChart,
+  IconHome,
+  IconKeyboard,
+  IconLock,
+  IconTag,
+  IconWallet,
+  type IconProps,
+} from './icons';
+import { closeDatabase } from '../lib/api';
+import { errorMessage } from '../lib/errors';
+import { requestFocus } from '../lib/focusBus';
+import { isMod, type Shortcut } from '../lib/shortcuts';
+import { useShortcuts } from '../hooks/useShortcuts';
 
 export type LayoutOutletContext = {
   hidden: boolean;
-  setHidden: React.Dispatch<React.SetStateAction<boolean>>;
+  setHidden: Dispatch<SetStateAction<boolean>>;
 };
 
 const LS_KEY = 'assettracker.hideAmounts';
 
+type NavEntry = {
+  to: string;
+  label: string;
+  icon: ComponentType<IconProps>;
+  match: (path: string) => boolean;
+};
+
+/** Sidebar order also defines the Mod+1…5 shortcuts. */
+const NAV_ITEMS: NavEntry[] = [
+  { to: '/', label: 'Home', icon: IconHome, match: (p) => p === '/' },
+  { to: '/transactions', label: 'Transactions', icon: IconArrows, match: (p) => p.startsWith('/transactions') },
+  { to: '/categories', label: 'Categories', icon: IconTag, match: (p) => p.startsWith('/categories') },
+  { to: '/accounts', label: 'Accounts', icon: IconWallet, match: (p) => p.startsWith('/accounts') },
+  { to: '/stats', label: 'Stats', icon: IconChart, match: (p) => p.startsWith('/stats') },
+];
+
 export default function Layout() {
   const loc = useLocation();
+  const nav = useNavigate();
+  const toast = useToast();
+
   const [hidden, setHidden] = useState<boolean>(() => {
     try { return localStorage.getItem(LS_KEY) === '1'; } catch { return false; }
   });
   useEffect(() => { try { localStorage.setItem(LS_KEY, hidden ? '1' : '0'); } catch {} }, [hidden]);
 
-  const title =
-    loc.pathname === '/' ? 'Home' :
-    loc.pathname.startsWith('/transactions') ? 'Transactions' :
-    loc.pathname.startsWith('/accounts') ? 'Accounts' :
-    loc.pathname.startsWith('/categories') ? 'Categories' :
-    loc.pathname.startsWith('/stats') ? 'Stats' :
-    'Settings';
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [locking, setLocking] = useState(false);
+
+  const pathname = loc.pathname;
+  const title = NAV_ITEMS.find((n) => n.match(pathname))?.label ?? 'AssetTracker';
+
+  const lock = useCallback(async () => {
+    setLocking(true);
+    try {
+      await closeDatabase();
+      sessionStorage.removeItem('db_unlocked');
+      nav('/login', { replace: true });
+    } catch (e) {
+      toast.error('Could not lock the database', { description: errorMessage(e) });
+      setLocking(false);
+    }
+  }, [nav, toast]);
+
+  const shortcuts = useMemo<Shortcut[]>(
+    () => [
+      {
+        id: 'search',
+        keys: 'Mod+K',
+        description: 'Search transactions',
+        global: true,
+        match: (e) => isMod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k',
+        run: () => {
+          if (!pathname.startsWith('/transactions')) nav('/transactions');
+          requestFocus('search');
+        },
+      },
+      {
+        id: 'slash',
+        keys: '/',
+        description: 'Focus the search field (Transactions)',
+        when: () => pathname.startsWith('/transactions'),
+        match: (e) => e.key === '/',
+        run: () => requestFocus('search'),
+      },
+      {
+        id: 'new',
+        keys: 'N',
+        description: 'New transaction (Home)',
+        when: () => pathname === '/',
+        match: (e) => !e.shiftKey && e.key.toLowerCase() === 'n',
+        run: () => requestFocus('quick-add'),
+      },
+      {
+        id: 'hide',
+        keys: 'H',
+        description: 'Hide / show amounts',
+        match: (e) => !e.shiftKey && e.key.toLowerCase() === 'h',
+        run: () => setHidden((v) => !v),
+      },
+      {
+        id: 'nav',
+        keys: 'Mod+1…5',
+        description: 'Go to Home, Transactions, Categories, Accounts, Stats',
+        global: true,
+        match: (e) => isMod(e) && !e.shiftKey && !e.altKey && /^Digit[1-5]$/.test(e.code),
+        run: (e) => {
+          const item = NAV_ITEMS[Number(e.code.slice(5)) - 1];
+          if (item) nav(item.to);
+        },
+      },
+      {
+        id: 'lock',
+        keys: 'Mod+Shift+L',
+        description: 'Lock the database',
+        global: true,
+        match: (e) => isMod(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'l',
+        run: () => void lock(),
+      },
+      {
+        id: 'help',
+        keys: '?',
+        description: 'Show this list',
+        match: (e) => e.key === '?',
+        run: () => setHelpOpen(true),
+      },
+    ],
+    [pathname, nav, lock]
+  );
+  useShortcuts(shortcuts);
 
   return (
-    // CHANGED: min-h-screen -> h-screen overflow-hidden
-    <div className="h-screen overflow-hidden bg-neutral-50 dark:bg-neutral-950 flex">
-      {/* LEFT SIDEBAR NAV (vertical) */}
-      <aside className="2xl:w-60 shrink-0 border-r border-neutral-200/60 dark:border-neutral-800/60 bg-white/90 dark:bg-neutral-900/80 backdrop-blur flex flex-col">
-        <div className="h-14 flex items-center px-4">
-          <div className="text-xl font-semibold">AssetTracker</div>
+    <div className="flex h-screen overflow-hidden bg-neutral-50 dark:bg-neutral-950">
+      {/* LEFT SIDEBAR NAV: icon rail below lg, full labels from lg */}
+      <aside className="flex w-16 shrink-0 flex-col border-r border-neutral-200/60 bg-white/90 backdrop-blur dark:border-neutral-800/60 dark:bg-neutral-900/80 lg:w-56">
+        <div className="flex h-14 items-center justify-center lg:justify-start lg:px-4">
+          <span className="hidden text-xl font-semibold lg:block">AssetTracker</span>
+          <span className="text-xl font-semibold lg:hidden" aria-hidden="true">AT</span>
         </div>
 
-        <nav className="flex-1 py-2">
-          <NavItem to="/" active={loc.pathname === '/'} label="Home" icon={IconHome} />
-          <NavItem to="/transactions" active={loc.pathname.startsWith('/transactions')} label="Transactions" icon={IconArrows} />
-          <NavItem to="/categories" active={loc.pathname.startsWith('/categories')} label="Categories" icon={IconTag} />
-          <NavItem to="/accounts" active={loc.pathname.startsWith('/accounts')} label="Accounts" icon={IconWallet} />
-          <NavItem to="/stats" active={loc.pathname.startsWith('/stats')} label="Stats" icon={IconChart} />
+        <nav className="flex-1 py-2" aria-label="Main">
+          {NAV_ITEMS.map((n) => (
+            <NavItem key={n.to} to={n.to} label={n.label} icon={n.icon} active={n.match(pathname)} />
+          ))}
         </nav>
 
-        <div className="px-4 py-3 text-xs text-neutral-500 border-t border-neutral-200/60 dark:border-neutral-800/60">
-          <AppVersion />
+        <div className="flex flex-col gap-2 border-t border-neutral-200/60 p-2 dark:border-neutral-800/60 lg:px-3 lg:py-3">
+          <button
+            type="button"
+            className="btn w-full justify-center lg:justify-start"
+            onClick={() => void lock()}
+            disabled={locking}
+            title="Lock database (Ctrl+Shift+L)"
+          >
+            <IconLock />
+            <span className="hidden lg:inline">{locking ? 'Locking…' : 'Lock database'}</span>
+            <span className="sr-only lg:hidden">Lock database</span>
+          </button>
+          <div className="text-center text-xs text-neutral-500 lg:text-left">
+            <AppVersion />
+          </div>
         </div>
       </aside>
 
-      {/* CHANGED: add min-h-0 so the child <main> can scroll */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <header className="h-14 flex items-center justify-between px-4 border-b border-neutral-200/60 dark:border-neutral-800/60 bg-white/90 dark:bg-neutral-900/80 backdrop-blur">
-          <div className="flex items-center gap-2" />
-          <div className="text-sm font-semibold tracking-wide">{title}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex h-14 items-center justify-between gap-3 border-b border-neutral-200/60 bg-white/90 px-4 backdrop-blur dark:border-neutral-800/60 dark:bg-neutral-900/80">
+          <h1 className="text-sm font-semibold tracking-wide">{title}</h1>
           <div className="flex items-center gap-2">
-            <HideAmountsToggle hidden={hidden} onToggle={() => setHidden(v => !v)} />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setHelpOpen(true)}
+              title="Keyboard shortcuts (?)"
+              aria-label="Keyboard shortcuts"
+            >
+              <IconKeyboard />
+            </button>
+            <ThemeToggle />
+            <HideAmountsToggle hidden={hidden} onToggle={() => setHidden((v) => !v)} />
           </div>
         </header>
 
-        {/* CHANGED: add min-h-0; keep overflow-y-auto so only page content scrolls */}
-        <main className="flex-1 min-h-0 overflow-y-auto">
+        {/* only page content scrolls */}
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <Outlet context={{ hidden, setHidden }} />
         </main>
       </div>
+
+      <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} shortcuts={shortcuts} />
     </div>
   );
 }
 
 function NavItem({
-  to, label, active, icon: Icon,
-}: { to: string; label: string; active: boolean; icon: (p:{className?:string})=>JSX.Element }) {
+  to,
+  label,
+  active,
+  icon: Icon,
+}: {
+  to: string;
+  label: string;
+  active: boolean;
+  icon: ComponentType<IconProps>;
+}) {
   return (
     <Link
       to={to}
-      className={[
-        'mx-2 my-0.5 flex items-center gap-3 px-3 py-2 rounded-xl transition',
+      title={label}
+      aria-current={active ? 'page' : undefined}
+      className={clsx(
+        'mx-2 my-0.5 flex items-center justify-center gap-3 rounded-xl border-l-2 px-3 py-2 transition lg:justify-start',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
         active
-          ? 'bg-neutral-100 dark:bg-neutral-800 text-blue-600 border-l-2 border-blue-600'
-          : 'text-neutral-600 hover:bg-neutral-100/70 dark:text-neutral-400 dark:hover:bg-neutral-800/60'
-      ].join(' ')}
+          ? 'border-blue-600 bg-neutral-100 text-blue-600 dark:bg-neutral-800'
+          : 'border-transparent text-neutral-600 hover:bg-neutral-100/70 dark:text-neutral-400 dark:hover:bg-neutral-800/60'
+      )}
     >
-      <Icon className={active ? 'h-5 w-5 text-blue-600' : 'h-5 w-5'} />
-      <span className="text-sm">{label}</span>
+      <Icon className="h-5 w-5 shrink-0" />
+      <span className="hidden text-sm lg:inline">{label}</span>
+      <span className="sr-only lg:hidden">{label}</span>
     </Link>
-  );
-}
-
-/* Icons */
-function IconHome({ className='' }) {
-  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><path d="M3 11.5 12 4l9 7.5V20a2 2 0 0 1-2 2h-5v-6H10v6H5a2 2 0 0 1-2-2z" strokeWidth="1.8"/></svg>;
-}
-function IconWallet({ className='' }) {
-  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><rect x="3" y="6" width="18" height="12" rx="2" strokeWidth="1.8"/><path d="M16 12h4" strokeWidth="1.8"/></svg>;
-}
-function IconArrows({ className='' }) {
-  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><path d="M7 7h10l-3-3M17 17H7l3 3" strokeWidth="1.8"/></svg>;
-}
-function IconChart({ className='' }) {
-  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><path d="M4 19V5M8 19v-7M12 19V8M16 19v-4M20 19V10" strokeWidth="1.8"/></svg>;
-}
-function IconCog({ className='' }) {
-  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3" strokeWidth="1.8"/><path d="M19 12a7 7 0 0 0-.16-1.5l2.11-1.64-2-3.46-2.5 1A7 7 0 0 0 14.5 4l-.5-3h-4l-.5 3a7 7 0 0 0-1.95 1.4l-2.5-1-2 3.46L5.16 10.5A7 7 0 0 0 5 12c0 .51.06 1.01.16 1.5l-2.11 1.64 2 3.46 2.5-1c.57.56 1.24 1.02 1.95 1.4l.5 3h4l.5-3a7 7 0 0 0 1.95-1.4l2.5 1 2-3.46-2.11-1.64c.1-.49.16-.99.16-1.5Z" strokeWidth="1.2"/></svg>;
-}
-function IconTag({ className='' }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor">
-      <path d="M20 12l-8 8-8-8V4h8l8 8z" strokeWidth="1.8"/>
-      <circle cx="9.5" cy="8.5" r="1.3" />
-    </svg>
   );
 }

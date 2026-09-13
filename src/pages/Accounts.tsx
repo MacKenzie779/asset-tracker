@@ -1,59 +1,54 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import type { LayoutOutletContext } from '../components/Layout';
 import type { Account, NewAccount } from '../types';
 import { listAccounts, addAccount, updateAccount, deleteAccount } from '../lib/api';
+import { errorMessage } from '../lib/errors';
+import { useMutation } from '../hooks/useMutation';
+import { useToast } from '../components/Toast';
 import AccountCard from '../components/AccountCard';
 import CreateAccountDialog from '../components/CreateAccountDialog';
 import ConfirmDialog from '../components/ConfirmDialog';
+import EmptyState from '../components/EmptyState';
+import IconButton from '../components/IconButton';
+import PageContainer from '../components/PageContainer';
+import Skeleton from '../components/Skeleton';
+import { IconArrowDown, IconArrowUp, IconPlus, IconWallet } from '../components/icons';
 
-function PlusIcon({ className = '' }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor">
-      <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-function IconArrowUp() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M12 5l-7 7h14L12 5z" strokeWidth="1.8" />
-    </svg>
-  );
-}
-function IconArrowDown() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M12 19l7-7H5l7 7z" strokeWidth="1.8" />
-    </svg>
-  );
-}
+type SortBy = 'name' | 'balance' | 'type';
 
 export default function Accounts() {
   const { hidden } = useOutletContext<LayoutOutletContext>();
+  const toast = useToast();
+  const mutate = useMutation();
+
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // dialogs
   const [openCreate, setOpenCreate] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // sorting
-  const [sortBy, setSortBy] = useState<'name' | 'balance' | 'type'>('name');
+  const [sortBy, setSortBy] = useState<SortBy>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setLoading(true);
     try {
       setItems(await listAccounts());
+      setError(null);
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   const sortedItems = useMemo(() => {
     const arr = [...items];
@@ -82,117 +77,140 @@ export default function Accounts() {
   }, [items, sortBy, sortDir]);
 
   const handleCreate = async (input: NewAccount) => {
-    await addAccount(input);
-    setOpenCreate(false);
+    await mutate(() => addAccount(input), {
+      success: 'Account created',
+      error: 'Could not create account',
+    });
     await refresh();
   };
 
   const handleUpdate = async (id: number, patch: { name?: string; color?: string | null }) => {
-    await updateAccount({ id, ...patch });
+    await mutate(() => updateAccount({ id, ...patch }), {
+      success: 'Account updated',
+      error: 'Could not update account',
+    });
     await refresh();
   };
 
-  const requestDelete = (id: number) => setConfirmId(id);
   const confirmDelete = async () => {
     if (confirmId == null) return;
-    await deleteAccount(confirmId);
+    const id = confirmId;
     setConfirmId(null);
-    await refresh();
+    try {
+      await deleteAccount(id); // rejected by the backend while transactions exist
+      toast.success('Account deleted');
+      await refresh();
+    } catch (e) {
+      setDeleteError(errorMessage(e, 'Unable to delete this account because it still has transactions.'));
+    }
   };
 
+  const firstLoad = loading && items.length === 0;
+
   return (
-    <div className="relative mx-auto max-w-[1580px] p-4">
+    <PageContainer className="pb-24">
       {/* Toolbar: count + sorting */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm text-neutral-500">{items.length} accounts</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-neutral-500">
+          {firstLoad ? 'Loading…' : `${items.length} account${items.length === 1 ? '' : 's'}`}
+        </div>
         <div className="flex items-center gap-2">
-          <label className="label">Sort by</label>
+          <label htmlFor="accounts-sort" className="label">
+            Sort by
+          </label>
           <select
-            className="input"
+            id="accounts-sort"
+            className="input w-auto"
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'name' | 'balance' | 'type')}
+            onChange={(e) => setSortBy(e.target.value as SortBy)}
           >
             <option value="name">Name</option>
             <option value="balance">Balance</option>
             <option value="type">Type</option>
           </select>
-          <button
-            type="button"
-            className="icon-btn"
-            title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+          <IconButton
+            label={sortDir === 'asc' ? 'Ascending (switch to descending)' : 'Descending (switch to ascending)'}
             onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-            aria-label="Toggle sort direction"
           >
             {sortDir === 'asc' ? <IconArrowUp /> : <IconArrowDown />}
-          </button>
+          </IconButton>
         </div>
       </div>
 
-      {/* Grid of account cards (matches your Figma) */}
-      <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
-        {sortedItems.map((a) => (
-          <AccountCard
-            key={a.id}
-            account={a}
-            hidden={hidden}
-            onSave={(patch) => handleUpdate(a.id, patch)}
-            onDelete={() => requestDelete(a.id)} // opens pretty confirm dialog
-          />
-        ))}
-      </div>
-
-      {loading && <div className="mt-4 text-xs text-neutral-500">Loading…</div>}
-      {!loading && items.length === 0 && (
-        <div className="mt-6 text-sm text-neutral-500">No accounts yet.</div>
+      {error && (
+        <div
+          role="alert"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200"
+        >
+          <span>Could not load accounts: {error}</span>
+          <button type="button" className="btn" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
       )}
 
-      {/* Floating "Create new account" button — bottom-right (Figma style) */}
+      {firstLoad ? (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="card p-4">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="mt-6 h-8 w-40" />
+            </div>
+          ))}
+        </div>
+      ) : items.length === 0 && !error ? (
+        <div className="card">
+          <EmptyState
+            icon={IconWallet}
+            title="No accounts yet"
+            description="Create an account to start tracking your transactions."
+            action={{ label: 'Create account', onClick: () => setOpenCreate(true) }}
+          />
+        </div>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {sortedItems.map((a) => (
+            <AccountCard
+              key={a.id}
+              account={a}
+              hidden={hidden}
+              onSave={(patch) => handleUpdate(a.id, patch)}
+              onDelete={() => setConfirmId(a.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Floating "Create new account" button */}
       <button
         type="button"
         onClick={() => setOpenCreate(true)}
-        className="fixed bottom-6 right-6 btn btn-primary flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg"
+        className="btn btn-primary fixed bottom-6 right-6 rounded-2xl px-4 py-3 shadow-lg"
         aria-label="Create new account"
       >
-        <PlusIcon className="h-5 w-5" />
+        <IconPlus className="h-5 w-5" strokeWidth={2} />
         <span className="hidden sm:inline">Create new account</span>
       </button>
 
-      {/* Create dialog (supports type + initial balance) */}
       <CreateAccountDialog open={openCreate} onClose={() => setOpenCreate(false)} onCreate={handleCreate} />
 
-      {/* Delete confirm dialog (styled, respects Cancel) */}
       <ConfirmDialog
         open={confirmId !== null}
         title="Delete account?"
         description="You can delete an account only if it has no transactions."
         confirmText="Delete"
-        cancelText="Cancel"
-        danger
+        variant="danger"
         onCancel={() => setConfirmId(null)}
-        onConfirm={async () => {
-          if (confirmId == null) return;
-          try {
-            await deleteAccount(confirmId);      // will throw if transactions exist
-            setConfirmId(null);
-            await refresh();
-          } catch (e: any) {
-            setConfirmId(null);
-            const msg =
-              typeof e === 'string' ? e :
-              e?.message ?? 'Unable to delete this account because it still has transactions.';
-            setErrorMsg(msg);
-          }
-        }}
+        onConfirm={confirmDelete}
       />
 
       <ConfirmDialog
-        open={errorMsg !== null}
+        open={deleteError !== null}
+        variant="alert"
         title="Cannot delete account"
-        description={errorMsg ?? ''}
-        confirmText="OK"
-        onCancel={() => setErrorMsg(null)}
-        onConfirm={() => setErrorMsg(null)}
+        description={deleteError ?? ''}
+        onConfirm={() => setDeleteError(null)}
       />
-    </div>
+    </PageContainer>
   );
 }

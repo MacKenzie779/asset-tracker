@@ -1,89 +1,88 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import clsx from 'clsx';
+import Modal from './Modal';
 
+export type ConfirmVariant = 'default' | 'danger' | 'alert';
+
+export type ConfirmDialogProps = {
+  open: boolean;
+  title: string;
+  description?: ReactNode;
+  /** `danger`: destructive confirm. `alert`: single OK button (acknowledgement). */
+  variant?: ConfirmVariant;
+  confirmText?: string;
+  cancelText?: string;
+  onConfirm: () => void | Promise<void>;
+  /** Escape / backdrop / Cancel. Optional for `alert`, where it falls back to onConfirm. */
+  onCancel?: () => void;
+};
+
+/**
+ * Confirmation dialog built on Modal.
+ * Initial focus is on the confirm button, so Enter confirms and Escape cancels natively.
+ */
 export default function ConfirmDialog({
   open,
   title,
   description,
-  confirmText = 'Confirm',
+  variant = 'default',
+  confirmText,
   cancelText = 'Cancel',
   onConfirm,
   onCancel,
-  danger = false,
-}: {
-  open: boolean;
-  title: string;
-  description?: string;
-  confirmText?: string;
-  cancelText?: string;
-  onConfirm: () => void | Promise<void>;
-  onCancel: () => void;
-  danger?: boolean;
-}) {
-
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
+}: ConfirmDialogProps) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+    if (!open) setBusy(false);
+  }, [open]);
 
-    // Global key handlers while open:
-  // Enter → confirm, Escape → cancel
-  useEffect(() => {
-    if (!open) return;
+  const cancel = () => {
+    if (busy) return;
+    if (onCancel) onCancel();
+    else void onConfirm();
+  };
 
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
-        e.preventDefault();
-        e.stopPropagation();
-        onConfirm?.();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel?.();
-      }
-    };
+  const confirm = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onConfirm();
+    } finally {
+      setBusy(false);
+    }
+  };
 
-    // capture=true so it wins over table/input handlers
-    window.addEventListener('keydown', onKey, { capture: true });
-    return () => window.removeEventListener('keydown', onKey, { capture: true });
-  }, [open, onConfirm, onCancel]);
-
-  if (!open) return null;
+  const isAlert = variant === 'alert';
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* backdrop */}
-      <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onCancel}
-        aria-hidden="true"
-      />
-      {/* dialog */}
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl border border-neutral-200/60 dark:border-neutral-800/60 bg-white dark:bg-neutral-900 shadow-xl">
-          <div className="p-5">
-            <h3 className="text-base font-semibold">{title}</h3>
-            {description ? (
-              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">{description}</p>
-            ) : null}
-            <div className="mt-5 flex justify-end gap-2">
-              <button className="btn" onClick={onCancel}>{cancelText}</button>
-              <button
-                className={`btn ${danger ? 'btn-primary bg-rose-600 hover:bg-rose-500 border-rose-600' : 'btn-primary'}`}
-                onClick={onConfirm}
-              >
-                {confirmText}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <Modal
+      open={open}
+      onClose={cancel}
+      title={title}
+      description={description}
+      size="md"
+      role={variant === 'default' ? 'dialog' : 'alertdialog'}
+      initialFocus={confirmRef}
+      footer={
+        <>
+          {!isAlert ? (
+            <button type="button" className="btn" onClick={cancel} disabled={busy}>
+              {cancelText}
+            </button>
+          ) : null}
+          <button
+            ref={confirmRef}
+            type="button"
+            className={clsx('btn', variant === 'danger' ? 'btn-danger' : 'btn-primary')}
+            onClick={confirm}
+            disabled={busy}
+          >
+            {confirmText ?? (isAlert ? 'OK' : 'Confirm')}
+          </button>
+        </>
+      }
+    />
   );
 }

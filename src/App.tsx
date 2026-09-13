@@ -2,17 +2,15 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import './index.css';
 import Layout from './components/Layout';
+import { ToastProvider } from './components/Toast';
 import Home from './pages/Home';
 import Accounts from './pages/Accounts';
 import Transactions from './pages/Transactions';
 import Stats from './pages/Stats';
 import Categories from './pages/Categories';
 import Login from './pages/Login';
-
-const appWindow = getCurrentWebviewWindow()
 
 function Guard({ children }: { children: JSX.Element }) {
   const [ok, setOk] = useState<boolean | null>(null);
@@ -23,7 +21,6 @@ function Guard({ children }: { children: JSX.Element }) {
     if (!unlocked) {
       setOk(false);
       nav("/login", { replace: true });
-      console.log('prefers dark?', window.matchMedia('(prefers-color-scheme: dark)').matches);
       return;
     }
     (async () => {
@@ -43,25 +40,27 @@ function Guard({ children }: { children: JSX.Element }) {
     })();
   }, [nav]);
 
-  if (ok === null) return null; // or a tiny splash
+  // Themed blank while the session check runs (avoids a white flash).
+  if (ok === null) return <div className="h-screen bg-neutral-50 dark:bg-neutral-950" aria-busy="true" />;
   return ok ? children : null;
 }
 
-
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<Guard><Layout /></Guard>}>
-          <Route path="/" element={<Home />} />
-          <Route path="/accounts" element={<Accounts />} />
-          <Route path="/transactions" element={<Transactions />} />
-          <Route path="/stats" element={<Stats />} />
-          <Route path="/categories" element={<Categories />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route element={<Guard><Layout /></Guard>}>
+            <Route path="/" element={<Home />} />
+            <Route path="/accounts" element={<Accounts />} />
+            <Route path="/transactions" element={<Transactions />} />
+            <Route path="/stats" element={<Stats />} />
+            <Route path="/categories" element={<Categories />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
   );
 }

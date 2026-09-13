@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { open as openWithSystem } from '@tauri-apps/plugin-shell';
 
 import {
   listAccounts,
@@ -8,7 +9,6 @@ import {
   updateTransaction,
   exportTransactionsXlsx,
   exportTransactionsPdf,
-  // NEW:
   exportReimbursableReportXlsx,
   exportReimbursableReportPdf,
 } from '../lib/api';
@@ -27,12 +27,23 @@ import type {
 import Amount from '../components/Amount';
 import ConfirmDialog from '../components/ConfirmDialog';
 import BasicSelect from '../components/BasicSelect';
+import EmptyState from '../components/EmptyState';
+import IconButton from '../components/IconButton';
+import PageContainer from '../components/PageContainer';
 import AccountSelectTx from '../components/transactions/AccountSelectTx';
-import TransactionTableTx from '../components/TransactionTableTx';
-
-type OutletCtx = { hidden: boolean };
+import TransactionsTable from '../components/TransactionsTable';
+import { useToast } from '../components/Toast';
+import { IconSearch, IconX } from '../components/icons';
+import type { LayoutOutletContext } from '../components/Layout';
+import { useMutation } from '../hooks/useMutation';
+import { errorMessage } from '../lib/errors';
+import { useFocusTarget } from '../lib/focusBus';
+import { basename, dirname } from '../lib/path';
+import { parseDecimal } from '../lib/number';
 
 const PAGE_SIZE = 18;
+
+type TimeSpan = 'all' | 'this_month' | 'last_month' | 'this_year' | 'custom';
 
 /* ---------- helpers ---------- */
 function ymd(date: Date) {
@@ -91,15 +102,18 @@ function useSearch() {
   return [filters, update, setFilters] as const;
 }
 
+const ALL_EXPORT_COLS = [
+  { key: 'date',        label: 'Date' },
+  { key: 'account',     label: 'Account' },
+  { key: 'category',    label: 'Category' },
+  { key: 'description', label: 'Notes' },
+  { key: 'amount',      label: 'Value' },
+] as const;
+
 /* ---------- page ---------- */
 export default function Transactions() {
-  const ALL_EXPORT_COLS = [
-    { key: 'date',        label: 'Date' },
-    { key: 'account',     label: 'Account' },
-    { key: 'category',    label: 'Category' },
-    { key: 'description', label: 'Notes' },
-    { key: 'amount',      label: 'Value' },
-  ] as const;
+  const toast = useToast();
+  const mutate = useMutation();
 
   const [exportCols, setExportCols] = useState<string[]>(
     ALL_EXPORT_COLS.map(c => c.key) // default: all
@@ -108,24 +122,26 @@ export default function Transactions() {
     setExportCols(cols => cols.includes(key) ? cols.filter(k => k !== key) : [...cols, key]);
 
   const [exportFmt, setExportFmt] = useState<'xlsx' | 'pdf'>('xlsx');
-  const [exportOkPath, setExportOkPath] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [reimbursableTarget, setReimbursableTarget] = useState<string>('');
 
-  const { hidden } = useOutletContext<OutletCtx>();
+  const { hidden } = useOutletContext<LayoutOutletContext>();
   const accounts = useAccounts();
 
   const [filters, updateFilters, setFilters] = useSearch();
 
   const [rawQuery, setRawQuery] = useState('');
   const query = useDebounced(rawQuery, 250);
+  const searchRef = useRef<HTMLInputElement>(null);
+  useFocusTarget('search', searchRef);
 
   const [type, setType] = useState<TxTypeFilter>('all');
 
-  const [timeSpan, setTimeSpan] =
-    useState<'all' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('all');
+  const [timeSpan, setTimeSpan] = useState<TimeSpan>('all');
   const [pendingCustom, setPendingCustom] = useState<{ from: string; to: string }>({ from: '', to: '' });
 
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [data, setData] = useState<TransactionSearchResult>({
     items: [],
     total: 0,
@@ -157,39 +173,43 @@ export default function Transactions() {
     [accounts, account_id]
   );
   const isReimbursableSelected = selectedAccount?.type === 'reimbursable';
-  const selectedBalance = selectedAccount?.balance ?? 0;
 
   // All-accounts view?
   const isAllAccounts = !account_id;
 
   // Compute adjusted global totals from backend-provided global sums.
   // Flip sign for reimbursable amounts to avoid double-counting net worth.
-const adjustedGlobal = useMemo(() => {
-  const si = data.sum_income_std ?? 0;
-  const se = data.sum_expense_std ?? 0;   // negative
-  const ri = data.sum_income_reimb ?? 0;  // positive
-  const re = data.sum_expense_reimb ?? 0; // negative
-  const init = data.sum_init ?? 0;
+  const adjustedGlobal = useMemo(() => {
+    const si = data.sum_income_std ?? 0;
+    const se = data.sum_expense_std ?? 0;   // negative
+    const ri = data.sum_income_reimb ?? 0;  // positive
+    const re = data.sum_expense_reimb ?? 0; // negative
+    const init = data.sum_init ?? 0;
 
-  // Flip reimbursable flows to avoid double-counting net worth
-  const income  = si + (-re);
-  const expense = se + (-ri);
-  const saldo   = income + expense + init; // <-- add Init
-  return { income, expense, saldo };
-}, [
-  data.sum_income_std,
-  data.sum_expense_std,
-  data.sum_income_reimb,
-  data.sum_expense_reimb,
-  data.sum_init, // <-- track
-]);
+    // Flip reimbursable flows to avoid double-counting net worth
+    const income  = si + (-re);
+    const expense = se + (-ri);
+    const saldo   = income + expense + init;
+    return { income, expense, saldo };
+  }, [
+    data.sum_income_std,
+    data.sum_expense_std,
+    data.sum_income_reimb,
+    data.sum_expense_reimb,
+    data.sum_init,
+  ]);
 
   const showIncome  = isAllAccounts ? adjustedGlobal.income  : (data.sum_income || 0);
   const showExpense = isAllAccounts ? adjustedGlobal.expense : (data.sum_expense || 0);
   const showSaldo = isAllAccounts
-  ? adjustedGlobal.saldo
-  : ((data.sum_income ?? 0) + (data.sum_expense ?? 0) + (data.sum_init ?? 0));
+    ? adjustedGlobal.saldo
+    : ((data.sum_income ?? 0) + (data.sum_expense ?? 0) + (data.sum_init ?? 0));
 
+  const currentPayload = (): TransactionSearch => ({
+    limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
+    query: query.trim() || undefined,
+    tx_type: type,
+  });
 
   /* ----- main fetch ----- */
   useEffect(() => {
@@ -206,8 +226,12 @@ const adjustedGlobal = useMemo(() => {
       .then((res) => {
         if (mySeq !== reqSeqRef.current) return; // stale
         setData(res);
+        setLoadError(null);
       })
-      .catch(console.error)
+      .catch((e) => {
+        if (mySeq !== reqSeqRef.current) return;
+        setLoadError(errorMessage(e));
+      })
       .finally(() => {
         if (mySeq === reqSeqRef.current) setLoading(false);
       });
@@ -216,34 +240,44 @@ const adjustedGlobal = useMemo(() => {
   const refresh = async () => {
     const mySeq = ++reqSeqRef.current;
     setLoading(true);
-    const fresh = await searchTransactions({
-      limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
-      query: query.trim() || undefined,
-      tx_type: type,
-    });
-    if (mySeq === reqSeqRef.current) {
-      setData(fresh);
-      setLoading(false);
+    try {
+      const fresh = await searchTransactions(currentPayload());
+      if (mySeq === reqSeqRef.current) {
+        setData(fresh);
+        setLoadError(null);
+      }
+    } catch (e) {
+      if (mySeq === reqSeqRef.current) setLoadError(errorMessage(e));
+    } finally {
+      if (mySeq === reqSeqRef.current) setLoading(false);
     }
   };
 
   const handleUpdateTx = async (patch: UpdateTransaction) => {
-    await updateTransaction(patch);
+    await mutate(() => updateTransaction(patch), {
+      success: 'Transaction updated',
+      error: 'Could not update transaction',
+    });
     await refresh();
   };
 
-  const requestDeleteTx = (id: number) => setConfirmTxId(id);
   const confirmDeleteTx = async () => {
-    const id = confirmTxId!;
+    if (confirmTxId == null) return;
+    const id = confirmTxId;
     setConfirmTxId(null);
-    await deleteTransaction(id);
-    await refresh();
+    try {
+      await mutate(() => deleteTransaction(id), {
+        success: 'Transaction deleted',
+        error: 'Could not delete transaction',
+      });
+      await refresh();
+    } catch {
+      // reported by the toast
+    }
   };
-
-  const sumSaldo = (data.sum_income ?? 0) + (data.sum_expense ?? 0);
 
   // --- Time span handling (no effect; explicit handlers) ---
-  const handleTimeSpanChange = (v: 'all' | 'this_month' | 'last_month' | 'this_year' | 'custom') => {
+  const handleTimeSpanChange = (v: TimeSpan) => {
     setTimeSpan(v);
     const now = new Date();
     if (v === 'all') {
@@ -261,6 +295,18 @@ const adjustedGlobal = useMemo(() => {
     }
   };
 
+  const hasActiveFilters =
+    rawQuery.trim() !== '' || timeSpan !== 'all' || account_id != null || type !== 'all';
+
+  const clearAllFilters = () => {
+    setRawQuery('');
+    setType('all');
+    setTimeSpan('all');
+    setPendingCustom({ from: '', to: '' });
+    // Clear bounds/account and go to the LAST page again
+    setFilters(prev => ({ ...prev, account_id: null, date_from: null, date_to: null, offset: -1 }));
+  };
+
   // Header click → toggle / set sort (server-side)
   const handleHeaderSort = (by: TxSortBy) => {
     setFilters(prev => {
@@ -270,72 +316,79 @@ const adjustedGlobal = useMemo(() => {
     });
   };
 
-  // --- Export (XLSX / PDF) + success modal ---
+  // --- Export feedback ---
+  const openPath = async (p: string) => {
+    try {
+      await openWithSystem(p);
+    } catch (e) {
+      toast.error('Could not open', { description: errorMessage(e) });
+    }
+  };
+  const notifyExportSaved = (path: string) =>
+    toast.success('Export saved', {
+      description: basename(path),
+      duration: 10000,
+      actions: [
+        { label: 'Open', onClick: () => openPath(path) },
+        { label: 'Show folder', onClick: () => openPath(dirname(path)) },
+      ],
+    });
+
+  const noColumns = exportCols.length === 0;
+
+  // --- Export (XLSX / PDF) ---
   const handleExport = async () => {
-    if (exportCols.length === 0) {
-      alert('Please choose at least one column to export.');
+    if (noColumns) {
+      toast.error('Choose at least one column to export');
       return;
     }
-    setLoading(true);
+    setExporting(true);
     try {
-      const common = {
-        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
-        query: query.trim() || undefined,
-        tx_type: type,
-      };
+      const common = currentPayload();
       const path =
         exportFmt === 'pdf'
           ? await exportTransactionsPdf(common, exportCols)
           : await exportTransactionsXlsx(common, exportCols);
-
-      setExportOkPath(path); // open success modal
+      notifyExportSaved(path);
     } catch (e) {
-      console.error(e);
-      alert('Export failed. See console for details.');
+      toast.error('Export failed', { description: errorMessage(e) });
     } finally {
-      setLoading(false);
+      setExporting(false);
     }
   };
 
-  // --- NEW: Export reimbursable report (only when filtered to reimbursable account) ---
+  // --- Export reimbursable report (only when filtered to reimbursable account) ---
   const handleExportReimbursable = async () => {
     if (!account_id || !isReimbursableSelected) {
-      alert('Filter to a reimbursable account first.');
+      toast.info('Filter to a reimbursable account first');
       return;
     }
-    if (exportCols.length === 0) {
-      alert('Please choose at least one column to export.');
+    if (noColumns) {
+      toast.error('Choose at least one column to export');
       return;
     }
-    setLoading(true);
+    setExporting(true);
     try {
       // We pass current filters; the backend will enforce reimbursable mode and ignore date/query for the slice.
-      const common = {
-        limit, offset, sort_by, sort_dir, account_id, date_from, date_to,
-        query: query.trim() || undefined,
-        tx_type: type,
-      };
-      
-      const targetVal = reimbursableTarget.trim() ? parseFloat(reimbursableTarget.replace(',', '.')) : undefined;
-      const target = (targetVal !== undefined && !isNaN(targetVal) && targetVal > 0) ? targetVal : undefined;
+      const common = currentPayload();
+      const targetVal = parseDecimal(reimbursableTarget);
+      const target = targetVal !== null && targetVal > 0 ? targetVal : undefined;
 
       const path =
         exportFmt === 'pdf'
           ? await exportReimbursableReportPdf(common, exportCols, target)
           : await exportReimbursableReportXlsx(common, exportCols, target);
-
-      setExportOkPath(path);
+      notifyExportSaved(path);
     } catch (e) {
-      console.error(e);
-      alert('Reimbursable export failed. See console for details.');
+      toast.error('Reimbursable export failed', { description: errorMessage(e) });
     } finally {
-      setLoading(false);
+      setExporting(false);
     }
   };
 
   const reimbursableDisabled = !account_id || !isReimbursableSelected;
 
-    // ----- better pagination helpers -----
+  // ----- pagination helpers -----
   const goToPage = (p: number) => {
     const clamped = Math.max(1, Math.min(totalPages, p));
     setFilters(prev => {
@@ -366,33 +419,39 @@ const adjustedGlobal = useMemo(() => {
     return items;
   }, [page, totalPages]);
 
-
   return (
-    <div className="px-3 sm:px-4 md:px-6 pt-4 grid gap-6 2
-    lg:grid-cols-[minmax(0,1fr)_clamp(240px,22vw,340px)]
-    xl:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]
-    2xl:grid-cols-[minmax(0,1fr)_clamp(280px,18vw,380px)]">
+    <PageContainer className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_clamp(240px,22vw,340px)] xl:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)] 2xl:grid-cols-[minmax(0,1fr)_clamp(280px,18vw,380px)]">
       {/* Left column */}
-      <div className="card">
+      <div className="card min-w-0">
         {/* Filters */}
-        <div className="p-4 border-b border-neutral-200/50 dark:border-neutral-800/50 grid gap-3 sm:grid-cols-12 items-center">
+        <div className="grid items-center gap-3 border-b border-neutral-200/50 p-4 dark:border-neutral-800/50 sm:grid-cols-12">
           {/* Search */}
           <div className="sm:col-span-5">
             <div className="relative">
               <input
-                className="input h-10 w-full"
-                style={{ paddingLeft: '2.25rem' }}
+                ref={searchRef}
+                type="text"
+                role="searchbox"
+                className="input h-10 w-full pl-9 pr-9"
                 placeholder="Search category, notes"
+                aria-label="Search transactions"
                 value={rawQuery}
                 onChange={(e) => setRawQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && rawQuery) { e.preventDefault(); setRawQuery(''); }
+                }}
               />
-              <svg
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400"
-                viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
+              <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+              {rawQuery && (
+                <IconButton
+                  size="sm"
+                  label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                  onClick={() => { setRawQuery(''); searchRef.current?.focus(); }}
+                >
+                  <IconX className="h-4 w-4" />
+                </IconButton>
+              )}
             </div>
           </div>
 
@@ -407,8 +466,9 @@ const adjustedGlobal = useMemo(() => {
                 { value: 'custom', label: 'Custom…' },
               ]}
               value={timeSpan}
-              onChange={(v) => handleTimeSpanChange(v as any)}
+              onChange={(v) => handleTimeSpanChange(v as TimeSpan)}
               placeholder="Time span"
+              ariaLabel="Time span"
               className="w-full"
             />
           </div>
@@ -434,6 +494,7 @@ const adjustedGlobal = useMemo(() => {
               value={type}
               onChange={(v) => setType(v as TxTypeFilter)}
               placeholder="Type"
+              ariaLabel="Type"
               className="w-full"
             />
           </div>
@@ -445,7 +506,9 @@ const adjustedGlobal = useMemo(() => {
                 <input
                   type="date"
                   className="input h-10 w-full"
+                  aria-label="From date"
                   value={pendingCustom.from}
+                  max={pendingCustom.to || undefined}
                   onChange={(e) => setPendingCustom(p => ({ ...p, from: e.target.value }))}
                 />
               </div>
@@ -453,11 +516,13 @@ const adjustedGlobal = useMemo(() => {
                 <input
                   type="date"
                   className="input h-10 w-full"
+                  aria-label="To date"
                   value={pendingCustom.to}
+                  min={pendingCustom.from || undefined}
                   onChange={(e) => setPendingCustom(p => ({ ...p, to: e.target.value }))}
                 />
               </div>
-              <div className="sm:col-span-2 flex gap-2">
+              <div className="flex gap-2 sm:col-span-2">
                 <button
                   className="btn h-10 px-3"
                   onClick={() => {
@@ -485,23 +550,51 @@ const adjustedGlobal = useMemo(() => {
           )}
         </div>
 
+        {loadError && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200/50 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-neutral-800/50 dark:bg-rose-950/40 dark:text-rose-200"
+          >
+            <span>Could not load transactions: {loadError}</span>
+            <button type="button" className="btn" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Table (server order; header controls sorting) */}
         <div className="overflow-auto">
-          <TransactionTableTx
+          <TransactionsTable
             items={data.items as Transaction[]}
             accounts={accounts}
             hidden={hidden}
             onDelete={id => setConfirmTxId(id)}
             onUpdate={handleUpdateTx}
-            sortBy={(sort_by ?? 'date') as TxSortBy}
-            sortDir={(sort_dir ?? 'asc') as TxSortDir}
-            onRequestSort={handleHeaderSort}
+            sortable={{
+              sortBy: (sort_by ?? 'date') as TxSortBy,
+              sortDir: (sort_dir ?? 'asc') as TxSortDir,
+              onRequestSort: handleHeaderSort,
+            }}
+            loading={loading}
+            emptyMessage={
+              <EmptyState
+                compact
+                icon={IconSearch}
+                title={hasActiveFilters ? 'No transactions match your filters' : 'No transactions yet'}
+                description={
+                  hasActiveFilters
+                    ? 'Try a different search or clear the filters.'
+                    : 'Add transactions from the Home page.'
+                }
+                action={hasActiveFilters ? { label: 'Clear filters', onClick: clearAllFilters } : undefined}
+              />
+            }
           />
         </div>
 
         {/* Summary */}
-        <div className="p-4 border-t border-neutral-200/50 dark:border-neutral-800/50">
-          <div className="flex flex-wrap gap-4 justify-end text-sm">
+        <div className="border-t border-neutral-200/50 p-4 dark:border-neutral-800/50">
+          <div className="flex flex-wrap justify-end gap-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="text-neutral-500">Total income</span>
               <Amount value={showIncome} hidden={hidden} />
@@ -518,12 +611,13 @@ const adjustedGlobal = useMemo(() => {
         </div>
 
         {/* Pagination */}
-        <div className="p-4 border-t border-neutral-200/50 dark:border-neutral-800/50 flex items-center justify-between">
-          <div className="text-xs text-neutral-500">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200/50 p-4 dark:border-neutral-800/50">
+          <div className="text-xs text-neutral-500" aria-live="polite">
             {data.total} result{data.total === 1 ? '' : 's'} • Page {page} / {totalPages}
+            {loading && <span className="ml-2">Loading…</span>}
           </div>
 
-          <div className="flex items-center gap-1">
+          <nav className="flex items-center gap-1" aria-label="Pagination">
             <button
               className="btn h-8 px-3"
               disabled={page <= 1 || loading}
@@ -535,7 +629,7 @@ const adjustedGlobal = useMemo(() => {
             {/* numbered buttons */}
             {pageItems.map((it, idx) =>
               it === '…' ? (
-                <span key={`dots-${idx}`} className="px-1 text-neutral-500 select-none">…</span>
+                <span key={`dots-${idx}`} className="select-none px-1 text-neutral-500">…</span>
               ) : (
                 <button
                   key={it}
@@ -545,6 +639,7 @@ const adjustedGlobal = useMemo(() => {
                   ].join(' ')}
                   disabled={loading || it === page}
                   aria-current={it === page ? 'page' : undefined}
+                  aria-label={`Page ${it}`}
                   onClick={() => goToPage(it)}
                 >
                   {it}
@@ -559,18 +654,17 @@ const adjustedGlobal = useMemo(() => {
             >
               Next
             </button>
-          </div>
+          </nav>
         </div>
-
       </div>
 
       {/* Right column: Export */}
       <div className="card p-4">
-        <h2 className="text-base font-semibold mb-2">Export</h2>
-        <p className="text-sm text-neutral-500 mb-3">Exports your current filtered result.</p>
+        <h2 className="mb-2 text-base font-semibold">Export</h2>
+        <p className="mb-3 text-sm text-neutral-500">Exports your current filtered result.</p>
 
-        <div className="space-y-2 text-sm">
-          <div className="font-medium">Export as</div>
+        <fieldset className="space-y-2 text-sm">
+          <legend className="font-medium">Export as</legend>
           <label className="flex items-center gap-2">
             <input
               type="radio"
@@ -589,10 +683,10 @@ const adjustedGlobal = useMemo(() => {
             />
             <span>PDF (.pdf)</span>
           </label>
-        </div>
+        </fieldset>
 
-        <div className="mt-3 space-y-2 text-sm">
-          <div className="font-medium">Choose columns</div>
+        <fieldset className="mt-3 space-y-2 text-sm">
+          <legend className="font-medium">Choose columns</legend>
           <div className="grid gap-1">
             {ALL_EXPORT_COLS.map(col => (
               <label key={col.key} className="flex items-center gap-2">
@@ -605,19 +699,31 @@ const adjustedGlobal = useMemo(() => {
               </label>
             ))}
           </div>
-        </div>
+          {noColumns && (
+            <p className="text-xs text-rose-600 dark:text-rose-400">Choose at least one column.</p>
+          )}
+        </fieldset>
 
-        <button className="btn btn-primary w-full mt-4" onClick={handleExport} disabled={loading}>
-          Export
+        <button
+          className="btn btn-primary mt-4 w-full"
+          onClick={handleExport}
+          disabled={exporting || noColumns}
+        >
+          {exporting ? 'Exporting…' : 'Export'}
         </button>
 
-        {/* NEW: reimbursable button */}
-        <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-800">
-          <div className="font-medium text-sm mb-2">Reimbursable report</div>
-          <div className="flex flex-col gap-2">
+        {/* Reimbursable report */}
+        <div className="mt-4 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <div className="mb-2 text-sm font-medium">Reimbursable report</div>
+          <div
+            className="flex flex-col gap-2"
+            title={reimbursableDisabled ? 'Filter to a reimbursable account to enable' : undefined}
+          >
             <input
               type="text"
+              inputMode="decimal"
               placeholder="Target value € (optional)"
+              aria-label="Target value in euro (optional)"
               className="input w-full"
               value={reimbursableTarget}
               onChange={(e) => setReimbursableTarget(e.target.value)}
@@ -626,20 +732,20 @@ const adjustedGlobal = useMemo(() => {
             <button
               className="btn w-full"
               onClick={handleExportReimbursable}
-              disabled={loading || reimbursableDisabled}
-              title={
-                reimbursableDisabled
-                  ? 'Filter to a reimbursable account to enable'
-                  : undefined
-              }
+              disabled={exporting || reimbursableDisabled || noColumns}
             >
               Export reimbursable report
             </button>
           </div>
+          {reimbursableDisabled && (
+            <p className="mt-2 text-xs text-neutral-500">
+              Filter to a reimbursable account to enable this report.
+            </p>
+          )}
         </div>
 
-        <div className="text-xs text-neutral-500 mt-2">
-          File will be saved into your Downloads folder with a timestamped name.
+        <div className="mt-2 text-xs text-neutral-500">
+          Files are saved to your Downloads folder with a timestamped name.
         </div>
       </div>
 
@@ -649,26 +755,10 @@ const adjustedGlobal = useMemo(() => {
         title="Delete transaction?"
         description="This action cannot be undone."
         confirmText="Delete"
-        cancelText="Cancel"
-        danger
+        variant="danger"
         onCancel={() => setConfirmTxId(null)}
-        onConfirm={async () => {
-          const id = confirmTxId!;
-          setConfirmTxId(null);
-          await deleteTransaction(id);
-          await refresh();
-        }}
+        onConfirm={confirmDeleteTx}
       />
-
-      {/* Export success modal (single OK button) */}
-      <ConfirmDialog
-        open={exportOkPath !== null}
-        title="Export successful"
-        description={`Saved to:\n${exportOkPath ?? ''}`}
-        confirmText="OK"
-        onConfirm={() => setExportOkPath(null)}
-        onCancel={() => setExportOkPath(null)}
-      />
-    </div>
+    </PageContainer>
   );
 }

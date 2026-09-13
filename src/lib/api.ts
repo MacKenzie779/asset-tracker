@@ -3,10 +3,12 @@ import type {
   Account, NewAccount, UpdateAccount,
   Transaction, NewTransaction, UpdateTransaction,
   TransactionSearch, TransactionSearchResult,
+  Category,
 } from '../types';
 
-export async function deleteAsset(id: number): Promise<boolean> {
-  return invoke<boolean>('delete_asset', { id });
+/* database session */
+export async function closeDatabase(): Promise<void> {
+  return invoke<void>('close_database');
 }
 
 /* accounts */
@@ -49,7 +51,7 @@ export async function exportTransactionsPdf(filters: TransactionSearch, columns?
   return invoke<string>('export_transactions_pdf', { filters, columns });
 }
 
-/* NEW: reimbursable window exports */
+/* reimbursable window exports */
 export async function exportReimbursableReportXlsx(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
   return invoke<string>('export_reimbursable_report_xlsx', { filters, columns, targetValue });
 }
@@ -57,29 +59,22 @@ export async function exportReimbursableReportPdf(filters: TransactionSearch, co
   return invoke<string>('export_reimbursable_report_pdf', { filters, columns, targetValue });
 }
 
-// categories
-import type { Category } from '../types';
-
+/* categories */
 export async function listCategories(): Promise<Category[]> {
   return invoke<Category[]>('list_categories');
 }
-
 export async function addCategory(name: string): Promise<number> {
   return invoke<number>('add_category', { name });
 }
-
 export async function renameCategory(id: number, name: string): Promise<boolean> {
   return invoke<boolean>('update_category', { id, name });
 }
-
 export async function deleteCategory(id: number): Promise<boolean> {
   return invoke<boolean>('delete_category', { id });
 }
 
-// at top, with the others:
+/* stats */
 export type TxMini = { account_id: number; date: string; amount: number };
-
-// ...
 
 export async function listTransactionsAll(): Promise<TxMini[]> {
   return invoke<TxMini[]>('list_transactions_all');

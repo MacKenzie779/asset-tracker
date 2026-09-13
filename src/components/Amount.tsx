@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { formatMoneyDE } from '../lib/number';
 
 type Props = {
   value: number;
@@ -9,6 +10,7 @@ type Props = {
   colorBySign?: boolean; // red/green by sign
 };
 
+/** The single place monetary values are rendered. */
 export default function Amount({
   value,
   hidden,
@@ -17,46 +19,15 @@ export default function Amount({
   blurInstead = true,
   colorBySign = true,
 }: Props) {
-  const formatter = useMemo(() => {
-    try {
-      return new Intl.NumberFormat('de-DE', {
-        style: 'currency',
-        currency,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-        currencyDisplay: 'symbol',
-        useGrouping: true,
-      });
-    } catch {
-      return null;
-    }
-  }, [currency]);
-
-  const text = useMemo(() => {
-    if (formatter) {
-      // Replace NBSP with normal space so it shows as "... €"
-      return formatter.format(value).replace(/\u00A0/g, ' ');
-    }
-    // Fallback manual "1.500,23 €" if Intl not available
-    const sign = value < 0 ? '-' : '';
-    const abs = Math.abs(value);
-    const fixed = abs.toFixed(2);
-    const [int, dec] = fixed.split('.');
-    const intWithDots = int.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-    return `${sign}${intWithDots},${dec} €`;
-  }, [formatter, value]);
+  const text = useMemo(() => formatMoneyDE(value, { currency }), [value, currency]);
 
   if (hidden) {
     return (
-      <span
-        className={
-          className +
-          ' select-none tabular-nums ' +
-          (blurInstead ? ' filter blur-sm' : '')
-        }
-        aria-hidden="true"
-      >
-        {'•'.repeat(6)}
+      <span className={`${className} select-none tabular-nums`}>
+        <span aria-hidden="true" className={blurInstead ? 'filter blur-sm' : undefined}>
+          {'•'.repeat(6)}
+        </span>
+        <span className="sr-only">Amount hidden</span>
       </span>
     );
   }

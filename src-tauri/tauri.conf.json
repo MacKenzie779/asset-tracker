@@ -29,7 +29,11 @@
   "mainBinaryName": "AssetTracker",
   "version": "../package.json",
   "identifier": "com.github.mackenzie779.assettracker",
-  "plugins": {},
+  "plugins": {
+    "shell": {
+      "open": "^(/|[A-Za-z]:[\\\\/]).+"
+    }
+  },
   "app": {
     "macOSPrivateApi": false,
     "windows": [
@@ -37,6 +41,8 @@
         "title": "AssetTracker",
         "width": 1100,
         "height": 720,
+        "minWidth": 900,
+        "minHeight": 600,
         "resizable": true,
         "useHttpsScheme": true
       }

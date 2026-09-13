@@ -1,33 +1,18 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
+import clsx from 'clsx';
 import type { Account, NewTransaction } from '../types';
 import { todayDE, parseDateDEToISO } from '../lib/format';
+import { parseDecimal } from '../lib/number';
+import { errorMessage } from '../lib/errors';
+import { useFocusTarget } from '../lib/focusBus';
 import CategorySelect from './CategorySelect';
 import AccountSelect from './AccountSelect';
+import { IconPaperPlane } from './icons';
+import { useToast } from './Toast';
 import { invalidateCategories } from '../hooks/useCategories';
-
-function parseAmountString(s: string): number | null {
-  if (s == null) return null;
-  let t = s.trim().replace(/\s/g, '');
-  if (t === '') return null;
-  const hasC = t.includes(',');
-  const hasD = t.includes('.');
-  if (hasC && hasD) {
-    const lastC = t.lastIndexOf(',');
-    const lastD = t.lastIndexOf('.');
-    t = lastC > lastD ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
-  } else if (hasC) {
-    t = t.replace(',', '.');
-  }
-  if (/^[-+]?\d+[.]$/.test(t)) return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
-}
 
 type TxType = 'income' | 'transfer' | 'expense';
 const LS_KEY = 'tx:lastType';
-const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(' ');
-const invalidCls =
-  'ring-1 ring-red-500/70 border-red-500/70 focus:ring-red-500/70 focus:border-red-500/70';
 
 export default function TransactionAddRow({
   accounts,
@@ -36,6 +21,7 @@ export default function TransactionAddRow({
   accounts: Account[];
   onAdd: (t: NewTransaction) => Promise<void>;
 }) {
+  const toast = useToast();
   const [txType, setTxType] = useState<TxType>(() => {
     const s = localStorage.getItem(LS_KEY) as TxType | null;
     return s === 'income' || s === 'transfer' || s === 'expense' ? s : 'expense';
@@ -60,12 +46,13 @@ export default function TransactionAddRow({
   // focus refs for required feedback
   const dateRef = useRef<HTMLInputElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
+  useFocusTarget('quick-add', dateRef);
 
   const [busy, setBusy] = useState(false);
 
   // validation
   const iso = parseDateDEToISO(dateDE);
-  const amt = parseAmountString(amountStr);
+  const amt = parseDecimal(amountStr);
 
   const isEmptyAccount = (v: number | '') => v === '';
   const catMissing = txType !== 'transfer' && (category.trim().length === 0);
@@ -112,27 +99,35 @@ export default function TransactionAddRow({
       // reset light fields; keep type
       setDateDE(todayDE()); setNotes(''); setAmountStr(''); setCategory(''); setReimId(''); setAccountId(''); setSrcId(''); setDstId('');
       setShowErrors(false);
+      toast.success(txType === 'transfer' ? 'Transfer added' : txType === 'income' ? 'Income added' : 'Expense added');
+      dateRef.current?.focus();
+    } catch (err) {
+      // keep the typed values so the user can retry
+      toast.error('Could not add transaction', { description: errorMessage(err) });
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <form className="p-2" onSubmit={onSubmit}>
+    <form className="p-2" onSubmit={onSubmit} aria-label="Add transaction">
       {/* type selector */}
-      <div className="mb-2 flex gap-2 p-3">
+      <div className="mb-2 flex gap-2 p-3" role="radiogroup" aria-label="Transaction type">
         <TypeBtn cur={txType} me="income"   onClick={setTxType}>Income</TypeBtn>
         <TypeBtn cur={txType} me="transfer" onClick={setTxType}>Transfer</TypeBtn>
         <TypeBtn cur={txType} me="expense"  onClick={setTxType}>Expense</TypeBtn>
       </div>
 
-      {/* 12-col grid; md+ stays on one line; account pickers use AccountSelect (same design as CategorySelect) */}
+      {/* 12-col grid on small screens; a 45-col grid on md+ keeps everything on one line.
+          Column budget per mode must total 45: income/expense 5+8+9+5+7+7+4, transfer 5+13+5+9+9+4. */}
       <div className="grid grid-cols-12 md:grid-cols-[repeat(45,minmax(0,1fr))] gap-2 items-center">
         {/* Date * */}
         <input
           ref={dateRef}
-          className={cx('input h-9 tabular-nums col-span-12 md:col-span-5', flagInvalid(dateMissing) && invalidCls)}
+          className={clsx('input h-9 tabular-nums col-span-12 md:col-span-5', flagInvalid(dateMissing) && 'input-invalid')}
           placeholder="dd.mm.yyyy*"
+          aria-label="Date"
+          aria-invalid={flagInvalid(dateMissing) || undefined}
           value={dateDE}
           onChange={(e) => setDateDE(e.target.value)}
         />
@@ -142,7 +137,7 @@ export default function TransactionAddRow({
             {/* Category * */}
             <div className="col-span-12 md:col-span-8">
               <CategorySelect
-                className={cx('input h-9 w-full', flagInvalid(catMissing) && invalidCls)}
+                className={clsx('input h-9 w-full', flagInvalid(catMissing) && 'input-invalid')}
                 value={category}
                 onChange={setCategory}
                 placeholder="Category*"
@@ -153,6 +148,7 @@ export default function TransactionAddRow({
             <input
               className="input h-9 col-span-12 md:col-span-9"
               placeholder="Notes"
+              aria-label="Notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
@@ -162,16 +158,17 @@ export default function TransactionAddRow({
               ref={amountRef}
               type="text"
               inputMode="decimal"
-              pattern="[0-9]*[.,]?[0-9]*"
-              className={cx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && invalidCls)}
+              className={clsx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && 'input-invalid')}
               placeholder="0,00*"
+              aria-label="Amount"
+              aria-invalid={flagInvalid(amountInvalid) || undefined}
               value={amountStr}
               onChange={(e) => setAmountStr(e.target.value)}
               title={amountInvalid ? 'Enter a non-zero amount' : undefined}
             />
 
-            {/* Account * — same design as CategorySelect */}
-            <div className={cx('col-span-12 md:col-span-7', flagInvalid(isEmptyAccount(accountId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+            {/* Account * */}
+            <div className={clsx('col-span-12 md:col-span-7', flagInvalid(isEmptyAccount(accountId)) && 'ring-1 ring-rose-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={accountId}
@@ -188,6 +185,7 @@ export default function TransactionAddRow({
                 value={reimId}
                 onChange={setReimId}
                 placeholder="Reimbursable"
+                ariaLabel="Reimbursable account (optional)"
                 className="input h-9 w-full"
               />
             </div>
@@ -196,8 +194,9 @@ export default function TransactionAddRow({
           <>
             {/* Notes */}
             <input
-              className="input h-9 col-span-12 md:col-span-15"
+              className="input h-9 col-span-12 md:col-span-13"
               placeholder="Notes"
+              aria-label="Notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
@@ -207,16 +206,17 @@ export default function TransactionAddRow({
               ref={amountRef}
               type="text"
               inputMode="decimal"
-              pattern="[0-9]*[.,]?[0-9]*"
-              className={cx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && invalidCls)}
+              className={clsx('input h-9 text-right tabular-nums col-span-12 md:col-span-5', flagInvalid(amountInvalid) && 'input-invalid')}
               placeholder="0,00*"
+              aria-label="Amount"
+              aria-invalid={flagInvalid(amountInvalid) || undefined}
               value={amountStr}
               onChange={(e) => setAmountStr(e.target.value)}
               title={amountInvalid ? 'Enter a non-zero amount' : undefined}
             />
 
             {/* Source * */}
-            <div className={cx('col-span-12 md:col-span-9', flagInvalid(srcId === '') && 'ring-1 ring-red-500/70 rounded-xl')}>
+            <div className={clsx('col-span-12 md:col-span-9', flagInvalid(srcId === '') && 'ring-1 ring-rose-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={srcId}
@@ -227,7 +227,7 @@ export default function TransactionAddRow({
             </div>
 
             {/* Destination * */}
-            <div className={cx('col-span-12 md:col-span-9', flagInvalid(dstId === '' || (srcId !== '' && dstId === srcId)) && 'ring-1 ring-red-500/70 rounded-xl')}>
+            <div className={clsx('col-span-12 md:col-span-9', flagInvalid(dstId === '' || (srcId !== '' && dstId === srcId)) && 'ring-1 ring-rose-500/70 rounded-xl')}>
               <AccountSelect
                 options={accounts}
                 value={dstId}
@@ -239,20 +239,16 @@ export default function TransactionAddRow({
           </>
         )}
 
-        {/* Add button — bigger paper plane */}
+        {/* Add button */}
         <button
-          title="Add"
-          aria-label="Add"
+          type="submit"
+          title="Add (Enter)"
+          aria-label="Add transaction"
           disabled={busy || !canSubmit}
-          className="
-            btn btn-primary h-10 w-100 p-0 rounded-full
-            col-span-10 md:col-span-4 grid place-items-center
-            disabled:opacity-40 disabled:cursor-not-allowed disabled:saturate-0
-          "
+          className="btn btn-primary h-10 w-full p-0 rounded-full col-span-12 md:col-span-4 grid place-items-center disabled:saturate-0"
         >
-          <PaperPlaneIcon />
+          <IconPaperPlane className="h-5 w-5" />
         </button>
-
       </div>
     </form>
   );
@@ -268,32 +264,17 @@ function TypeBtn({
   return (
     <button
       type="button"
-      className={[
-        'px-3 h-8 rounded-full text-sm',
+      role="radio"
+      aria-checked={active}
+      className={clsx(
+        'px-3 h-8 rounded-full text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
         active
           ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900'
           : 'bg-neutral-200/60 dark:bg-neutral-800/60 hover:bg-neutral-300/60 dark:hover:bg-neutral-700/60',
-      ].join(' ')}
+      )}
       onClick={() => onClick(me)}
     >
       {children}
     </button>
   );
 }
-
-function PaperPlaneIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      className="block"
-      fill="none"
-      stroke="currentColor"
-    >
-      <path d="M22 2L11 13" strokeWidth="2" strokeLinecap="round"/>
-      <path d="M22 2L15 22l-4-9-9-4 20-7Z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  );
-}
-

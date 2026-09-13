@@ -89,3 +89,27 @@ export function formatMoneyDE(
   const intWithDots = int.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
   return `${sign}${intWithDots}${dec ? `,${dec}` : ''} €`;
 }
+
+/** "1.234,56" with an explicit sign: '+' for positive, '-' for negative, none for zero. */
+export function formatSigned(n: number, opts: { fractionDigits?: number; plus?: boolean } = {}): string {
+  const { fractionDigits = 2, plus = true } = opts;
+  const abs = formatDecimalDE(Math.abs(n), { fractionDigits, grouping: true });
+  if (n > 0.0000001) return plus ? `+${abs}` : abs;
+  if (n < -0.0000001) return `-${abs}`;
+  return abs;
+}
+
+/** "1.234,56" without a sign (magnitude only). */
+export function formatAbs(n: number, fractionDigits = 2): string {
+  return formatDecimalDE(Math.abs(n), { fractionDigits, grouping: true });
+}
+
+/** "-3,7 %" */
+export function formatPercent(n: number, fractionDigits = 1, plus = false): string {
+  const abs = formatDecimalDE(Math.abs(n), { fractionDigits, grouping: false });
+  const sign = n < -0.05 ? '-' : n > 0.05 && plus ? '+' : '';
+  return `${sign}${abs} %`;
+}
+
+/** The privacy mask, same width as a typical amount. */
+export const MASK = '•••••';

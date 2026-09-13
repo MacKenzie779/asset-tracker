@@ -14,37 +14,35 @@ export default function ShortcutsHelp({
     <Modal
       open={open}
       onClose={onClose}
-      title="Keyboard shortcuts"
+      title="KEYBOARD"
       size="md"
       initialFocus="panel"
       footer={
-        <button type="button" className="btn btn-primary" onClick={onClose}>
-          Close
+        <button type="button" className="t-btn t-btn--primary" onClick={onClose}>
+          CLOSE · ESC
         </button>
       }
     >
-      <ul className="divide-y divide-neutral-200/60 dark:divide-neutral-800/60">
+      <div>
         {shortcuts.map((s) => (
-          <li key={s.id} className="flex items-center justify-between gap-4 py-2 text-sm">
-            <span className="text-neutral-700 dark:text-neutral-300">{s.description}</span>
-            <span className="flex shrink-0 items-center gap-1">
+          <div key={s.id} className="t-help-row">
+            <span>{s.description}</span>
+            <span className="keys">
               {formatKeys(s.keys).map((k, i) => (
-                <kbd key={i} className="kbd">
-                  {k}
-                </kbd>
+                <kbd key={i} className="t-key">{k}</kbd>
               ))}
             </span>
-          </li>
+          </div>
         ))}
-        <li className="flex items-center justify-between gap-4 py-2 text-sm">
-          <span className="text-neutral-700 dark:text-neutral-300">Save / cancel an inline edit</span>
-          <span className="flex shrink-0 items-center gap-1">
-            <kbd className="kbd">Enter</kbd>
-            <span className="text-neutral-400">/</span>
-            <kbd className="kbd">Esc</kbd>
-          </span>
-        </li>
-      </ul>
+        <div className="t-help-row">
+          <span>Save / cancel an inline edit</span>
+          <span className="keys"><kbd className="t-key">Enter</kbd><kbd className="t-key">Esc</kbd></span>
+        </div>
+        <div className="t-help-row">
+          <span>Accept a completion in quick entry or the palette</span>
+          <span className="keys"><kbd className="t-key">Tab</kbd></span>
+        </div>
+      </div>
     </Modal>
   );
 }

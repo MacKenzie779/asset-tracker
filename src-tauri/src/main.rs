@@ -83,7 +83,7 @@ struct TxSearch {
     account_id: Option<i64>,
     date_from: Option<String>, // inclusive, YYYY-MM-DD
     date_to: Option<String>,   // inclusive, YYYY-MM-DD
-    tx_type: Option<String>,   // "all" | "income" | "expense"
+    tx_type: Option<String>,   // "all" | "income" | "expense" | "transfer"
     limit: Option<i64>,
     offset: Option<i64>,      // if < 0 => compute last page on server
     sort_by: Option<String>,  // "date"|"category"|"description"|"amount"|"account"|"id"
@@ -581,6 +581,7 @@ fn build_where(filters: &TxSearch, where_sql: &mut String, args: &mut Vec<BindAr
         match t.as_str() {
             "income" => where_sql.push_str(" AND t.amount > 0 "),
             "expense" => where_sql.push_str(" AND t.amount < 0 "),
+            "transfer" => where_sql.push_str(" AND t.transfer_id IS NOT NULL "),
             _ => {}
         }
     }

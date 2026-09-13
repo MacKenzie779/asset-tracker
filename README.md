@@ -7,7 +7,7 @@ Built with Tauri 2 (Rust) and React. Ships as a Windows installer, a Flatpak and
 ## Why AssetTracker
 
 - **Your data stays with you.** Everything lives in one SQLCipher-encrypted database file that you choose the location of. There is no account, no sync, no telemetry and no network access.
-- **Fast to use every day.** A quick-add row on the home screen, inline editing in every table, keyboard shortcuts, and a global "hide amounts" toggle for when someone is looking over your shoulder.
+- **Fast to use every day.** One terminal screen: a quick-entry strip docked above the transaction blotter, inline editing on every row, a `Ctrl+K` command palette that also parses shorthand like `out 21,50 lebensmittel`, keyboard shortcuts, and a global "mask amounts" toggle for when someone is looking over your shoulder.
 - **Built for shared money.** People you lend to, borrow from or pay for get their own balance: positive when they owe you, negative when you owe them. A settlement statement lists what is still open, oldest first.
 - **Real exports.** Excel and PDF exports of any filtered view, with the columns you pick, saved straight to your Downloads folder.
 
@@ -19,7 +19,7 @@ Built with Tauri 2 (Rust) and React. Ships as a Windows installer, a Flatpak and
 - Server-side search, filtering by account, type and time span, sorting on every column, and pagination that opens on your most recent entries.
 - Excel (`.xlsx`) and PDF exports of the current filter, plus a per-person settlement statement with an optional target amount.
 - Statistics: net worth over time (total or per account), income vs. expenses, spending and income by category, top expenses, savings rate.
-- Light, dark and system theme; hide-amounts toggle; lock-database action; keyboard shortcuts.
+- Light, dark and system theme; mask-amounts toggle; lock-database action; keyboard shortcuts.
 - European conventions throughout: `dd.mm.yyyy` dates and `1.234,56 €` amounts.
 
 ## Install
@@ -48,7 +48,7 @@ Download the `.AppImage` from the [latest release](https://github.com/MacKenzie7
 
 1. Click **Create new database**, choose where the file should live and set a passphrase.
 2. Create one or more accounts, optionally with an initial balance.
-3. Add transactions from the home screen.
+3. Commit transactions from the quick-entry strip above the blotter (or `Ctrl+K` and type `out 12,50 lebensmittel`).
 
 The passphrase is the encryption key of the database. It is never written to disk and **cannot be recovered**. If you lose it, the data in that file is gone. Keep the passphrase somewhere safe and back up the database file itself; a backup is a copy of the single `.db` file.
 
@@ -68,7 +68,7 @@ You are asked for the passphrase on every launch. Only the path of the last data
 | Shared 100 € dinner you paid, half each | Expense 100 € with *Paid for: Anna*, their share 50 € | owes you 50 € |
 | You borrow 1 000 € from a friend | Transfer Friend → Bank | you owe 1 000 € |
 
-An expense booked directly on a person is your consumption paid by them, so it counts in your spending statistics. The **settlement statement** (Transactions page, filtered to a person) lists the open items oldest first with what is still due, in whichever direction the balance points.
+An expense booked directly on a person is your consumption paid by them, so it counts in your spending statistics. **Settle up** (`Ctrl+S`, or the button in the ledger column) lists the open items oldest first, lets you pick them or type a target amount, books the settlement as a transfer to one of your accounts, and exports the **settlement statement** with what is still due, in whichever direction the balance points.
 
 **Transfers** move money between any two accounts or people. Both sides are written together and stay linked: editing the date, notes, category or amount of one side updates the other, and deleting one side removes both. A transfer to or from a person keeps the category of the expense it belongs to, so a person's ledger and settlement statement show what each amount was for. Plain moves between your own accounts use the reserved category `Transfer`. An account's initial balance is stored as a real transaction with the reserved category `Init`. Transfers and initial balances are excluded from spending statistics.
 
@@ -80,14 +80,21 @@ Version 2 replaces the old "reimbursable" account type with people. The first ti
 
 | Keys | Action |
 | --- | --- |
-| `Ctrl` `K` | Search transactions (from any page) |
-| `/` | Focus the search field on the Transactions page |
-| `N` | Focus the quick-add row on the Home page |
-| `H` | Hide or show all amounts |
-| `Ctrl` `1` … `5` | Go to Home, Transactions, Categories, Accounts, Stats |
+| `Ctrl` `K` | Command palette: search, actions, and transaction shorthand |
+| `Ctrl` `N` | Focus the quick entry |
+| `Ctrl` `S` | Settle up with a person |
+| `Ctrl` `E` | Export the current filter |
+| `Ctrl` `,` | Ledger column → ACCOUNTS tab |
+| `Ctrl` `1` / `2` | Terminal / Stats tab |
+| `J` `K` or `↑` `↓` | Move the row selection in the blotter |
+| `Enter` / `Backspace` | Edit / delete the selected row (delete is undoable) |
+| `Ctrl` `Z` | Undo the last commit or delete |
+| `/` | Focus the blotter search |
+| `H` | Mask or show all amounts |
 | `Ctrl` `Shift` `L` | Lock the database and return to the unlock screen |
 | `?` | Show the shortcut list |
 | `Enter` / `Esc` | Save or cancel an inline edit |
+| `Tab` | Accept a completion in the quick entry or the palette |
 
 On macOS builds `Ctrl` is `⌘`.
 
@@ -95,7 +102,7 @@ On macOS builds `Ctrl` is `⌘`.
 
 - The database is a SQLite file encrypted with SQLCipher. The passphrase is applied as the cipher key when the file is opened and lives only in memory.
 - The app makes no network requests. The content security policy blocks remote origins, and the Rust side has no HTTP client.
-- Besides the database, the app keeps a few preferences in the webview's local storage: the last database path, the theme, the hide-amounts state and the last used transaction type. No financial data is stored there.
+- Besides the database, the app keeps a few preferences in the webview's local storage: the last database path, the theme, the mask-amounts state, the last used transaction type and account, the export format and columns, and the account sort. No financial data is stored there.
 - Exports are written to your Downloads folder with a timestamped name and are not encrypted.
 
 ## Building from source
@@ -139,9 +146,11 @@ The version in `package.json` is bumped from the tag during the build and is not
 
 ```
 src/                     React frontend (Vite, TypeScript, Tailwind)
-  pages/                 One component per route: Home, Transactions, Categories, Accounts, Stats, Login
-  components/            UI components (dialogs, tables, selects, toasts, icons)
-  lib/                   Typed wrappers around Tauri commands, formatting, theme, shortcuts
+  pages/                 Terminal (blotter + ledger column), Stats, Login
+  components/terminal/   Blotter, quick entry, ledger tabs, command palette, settle sheet, controls
+  components/            Shell layout, modal, toasts, icons
+  styles/terminal.css    Design tokens (dark is the designed theme; light inverts the surfaces) and component classes
+  lib/                   Typed wrappers around Tauri commands, in-memory ledger store, analytics, settlement, formatting, theme, shortcuts
   hooks/                 Small React hooks
 src-tauri/
   src/main.rs            All Tauri commands: database, accounts, transactions, categories, search, exports
@@ -159,7 +168,7 @@ Notes for contributors:
 
 ## Tech stack
 
-Tauri 2 · Rust · sqlx with bundled SQLCipher · React 18 · TypeScript · Vite · Tailwind CSS · Recharts · rust_xlsxwriter · printpdf
+Tauri 2 · Rust · sqlx with bundled SQLCipher · React 18 · TypeScript · Vite · Tailwind CSS · IBM Plex Sans and Azeret Mono (bundled) · rust_xlsxwriter · printpdf
 
 ## Contributing
 

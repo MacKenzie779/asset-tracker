@@ -1,780 +1,286 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+// Stats tab (2d): KPI rail, net worth + monthly flows, then category treemap,
+// allocation and top expenses / balance with people. Hand-built SVG and flex
+// bars; every aggregate comes from lib/analytics.
+import { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
+import Money from '../components/terminal/Money';
+import Sparkline, { sparkPoints } from '../components/terminal/Sparkline';
 import {
-  listAccounts,
-  listTransactionsAll,
-  searchTransactions,
-} from '../lib/api';
-import type { Account } from '../types';
-import type { TxMini } from '../lib/api';
-import Amount from '../components/Amount';
-import PageContainer from '../components/PageContainer';
-import Skeleton from '../components/Skeleton';
-import { useToast } from '../components/Toast';
-import type { LayoutOutletContext } from '../components/Layout';
-import { useTheme } from '../hooks/useTheme';
-import { chartTheme } from '../lib/theme';
-import { errorMessage } from '../lib/errors';
-import { formatDate } from '../lib/format';
-import { formatMoneyDE } from '../lib/number';
-import { owedToYou, totalValue, youOwe } from '../lib/people';
-
-// Recharts
-import {
-  ResponsiveContainer,
-  PieChart, Pie, Cell, Tooltip as RTooltip, Legend as RLegend,
-  LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Brush,
-} from 'recharts';
-
-type TxExt = { id: number; date: string; amount: number; category?: string | null; description?: string | null; transfer_id?: number | null };
-type GroupBy = 'monthly' | 'yearly';
-type Range = '6m' | '12m' | '24m' | '36m' | 'ytd' | 'all';
-
-// consistent colour (prefer account.color)
-const FALLBACK_COLORS = ['#2563eb', '#16a34a', '#ea580c', '#db2777', '#0891b2', '#ca8a04', '#7c3aed', '#ef4444'];
-const colorFor = (idx: number, hex?: string | null) => hex || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
-
-// Internal bookkeeping categories that must not pollute spending analytics.
-const EXCLUDED_CATEGORIES = new Set(['transfer', 'transfers', 'init', 'korrektur']);
-const EXCLUDED_NOTE = 'Transfers and initial balances excluded';
-const EXCLUDED_TITLE = 'Excluded categories: Transfer, Transfers, Init, Korrektur';
+  accountSeries, allocation, categorySpend, daysAgoISO, flowSeries, lastMonthKeys, netThisMonth, netWorthSeries, pctChange, savingsRate, sumsAllTime, topExpenses,
+  type CategorySpend,
+} from '../lib/analytics';
+import { emit } from '../lib/bus';
+import { useData } from '../lib/data';
+import { formatDate, formatMonthKey } from '../lib/format';
+import { formatAbs, formatPercent, MASK } from '../lib/number';
+import { totalValue } from '../lib/people';
+import { useShell } from '../lib/shell';
 
 export default function Stats() {
-  const { hidden } = useOutletContext<LayoutOutletContext>();
-  const toast = useToast();
-  const { resolved } = useTheme();
-  const t = useMemo(() => chartTheme(resolved), [resolved]);
+  const data = useData();
+  const { hidden } = useShell();
+  const nav = useNavigate();
 
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [txAll, setTxAll] = useState<TxMini[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [txCatItems, setTxCatItems] = useState<TxExt[]>([]);
-  const [catLoading, setCatLoading] = useState(true);
-
-  // controls
-  const [groupBy, setGroupBy] = useState<GroupBy>('monthly');
-  const [range, setRange] = useState<Range>('12m');
-  const [showIndividualAccounts, setShowIndividualAccounts] = useState(false);
-
-  // quick helper (month start/end)
-  const today = new Date();
-  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const [acc, tx] = await Promise.all([
-          listAccounts(),
-          listTransactionsAll(),
-        ]);
-        setAccounts(acc);
-        setTxAll(tx);
-      } catch (e) {
-        toast.error('Could not load statistics', { description: errorMessage(e) });
-      } finally {
-        setLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      setCatLoading(true);
-      try {
-        const pageSize = 1000;
-        let offset = 0;
-        const all: TxExt[] = [];
-        while (true) {
-          const res = await searchTransactions({
-            tx_type: 'all', // fetch all to do both income and expenses
-            limit: pageSize,
-            offset,
-            sort_by: 'id',
-            sort_dir: 'asc',
-          });
-          const items = (res.items ?? []) as any[];
-          all.push(...items.map(it => ({
-            id: it.id,
-            date: it.date,
-            amount: it.amount,
-            category: it.category,
-            description: it.description,
-            transfer_id: it.transfer_id ?? null,
-          })));
-          const total: number = (res as any).total ?? items.length;
-          offset += pageSize;
-          if (offset >= total) break;
-        }
-        setTxCatItems(all);
-      } catch (e) {
-        console.error('fetch categories failed', e);
-        toast.error('Could not load category statistics', { description: errorMessage(e) });
-        setTxCatItems([]);
-      } finally {
-        setCatLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* =========================
-     Derived values / helpers
-     ========================= */
-
-  // Net worth pie: every positive balance is an asset, including what people owe you
-  const pieData = useMemo(() => {
-    const rows = accounts.map((a, i) => {
-      return { id: a.id, name: a.name, value: a.balance ?? 0, color: colorFor(i, a.color) };
-    }).filter(r => r.value > 0.000001); // pie can't show negatives; we skip <=0 slices
-    const total = rows.reduce((s,r)=>s+r.value,0);
-    return { rows, total };
-  }, [accounts]);
-
-  // Balances with people
-  const owed = useMemo(() => owedToYou(accounts), [accounts]);
-  const owe = useMemo(() => youOwe(accounts), [accounts]);
-
-  // Monthly net for current month (backend sums exclude transfers)
-  const [monthNet, setMonthNet] = useState<number>(0);
-  useEffect(() => {
-    (async () => {
-      const res = await searchTransactions({
-        date_from: iso(firstOfMonth),
-        date_to: iso(today),
-        tx_type: 'all',
-        limit: 1, offset: 0, sort_by: 'date', sort_dir: 'asc', // minimal page; sums are global
-      });
-      const net = (res.sum_income ?? 0) + (res.sum_expense ?? 0);
-      setMonthNet(net);
-    })().catch(console.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // --- Build time series (monthly/yearly) for total net worth and each account
-  const series = useMemo(() => {
-    if (!accounts.length) return { keys: [] as string[], data: [] as any[] };
-
-    // group boundary function
-    const groupKey = (d: Date) =>
-      groupBy === 'yearly' ? `${d.getFullYear()}` : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-
-    // range cutoff
-    const firstDate = txAll.length ? parseISO(txAll[0].date) : today;
-    const startAll = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
-    const allKeys = enumerateGroups(startAll, today, groupBy);
-
-    const cutoffKeys =
-      range === 'all' ? allKeys :
-      range === 'ytd' ? allKeys.filter(k => k.startsWith(`${today.getFullYear()}`)) :
-      (() => {
-          const n = range === '6m' ? 6 : range === '12m' ? 12 : range === '24m' ? 24 : range === '36m' ? 36 : 12;
-          return allKeys.slice(-n);
-      })();
-
-    // Build cumulative balances per account per group end (last day of month / end of year)
-    const accIds = accounts.map(a => a.id);
-    // initialize running totals (by account)
-    const run: Record<number, number> = {};
-    accIds.forEach(id => { run[id] = 0; });
-
-    // pre-bucket transactions by group key
-    const buckets: Record<string, TxMini[]> = {};
-    for (const tx of txAll) {
-      const d = parseISO(tx.date);
-      const k = groupKey(d);
-      (buckets[k] ||= []).push(tx);
-    }
-    // ensure buckets are date asc (they already are in txAll asc, but safe)
-    for (const k of Object.keys(buckets)) {
-      buckets[k].sort((a,b) => a.date.localeCompare(b.date));
-    }
-
-    // accumulate through groups
-    const rows: any[] = [];
-
-    for (const key of allKeys) {
-      const txs = buckets[key] || [];
-      // apply all tx in this group
-      for (const tx of txs) {
-        run[tx.account_id] = (run[tx.account_id] || 0) + tx.amount;
-      }
-
-      // snapshot at group end
-      const point: any = { key };
-
-      // per-account
-      for (const a of accounts) {
-        point[`acc_${a.id}`] = run[a.id] || 0;
-      }
-      // total net worth (plain sum of balances)
-      point.total = accounts.reduce((s, a) => s + (run[a.id] || 0), 0);
-
-      rows.push(point);
-    }
-
-    // reduce to chosen range
-    const byKey = new Map(rows.map(r => [r.key, r]));
-    const filtered = cutoffKeys.map(k => byKey.get(k)!).filter(Boolean);
-
-    return { keys: cutoffKeys, data: filtered };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts, txAll, groupBy, range]);
-
-  // Lines config for accounts
-  const accountLines = useMemo(() => {
-    return accounts.map((a, i) => ({
-      id: a.id,
-      key: `acc_${a.id}`,
-      name: a.name,
-      color: colorFor(i, a.color),
-    }));
-  }, [accounts]);
-
-  const totalBalance = useMemo(() => totalValue(accounts), [accounts]);
-
-  // Toggle visibility by account (affects lines & pie)
-  const [hiddenAcc, setHiddenAcc] = useState<Set<number>>(new Set());
-  const toggleAcc = (id: number) =>
-    setHiddenAcc(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  const isAccHidden = (id: number) => hiddenAcc.has(id);
-
-  const pieRowsVisible = useMemo(
-    () => pieData.rows.filter(r => !hiddenAcc.has(r.id)),
-    [pieData.rows, hiddenAcc]
+  const months12 = useMemo(() => lastMonthKeys(12), []);
+  const months6 = useMemo(() => lastMonthKeys(6), []);
+  const total = totalValue(data.accounts);
+  const worth = useMemo(() => netWorthSeries(data.txAll, months12), [data.txAll, months12]);
+  const change = pctChange(worth);
+  const net = useMemo(() => netThisMonth(data.txAll), [data.txAll]);
+  const flows = useMemo(() => flowSeries(data.txAll, months12), [data.txAll, months12]);
+  const income12 = flows.reduce((s, f) => s + f.income, 0);
+  const expense12 = flows.reduce((s, f) => s + f.expense, 0);
+  const rate = savingsRate(income12, expense12);
+  const all = useMemo(() => sumsAllTime(data.txAll), [data.txAll]);
+  const spend = useMemo(() => categorySpend(data.txAll, daysAgoISO(90)), [data.txAll]);
+  const alloc = useMemo(() => allocation(data.accounts), [data.accounts]);
+  const top = useMemo(() => topExpenses(data.txAll, 5), [data.txAll]);
+  const peopleSeries = useMemo(
+    () => data.people.map((p) => ({ person: p, series: accountSeries(data.txAll, p.id, months6) })),
+    [data.people, data.txAll, months6]
   );
 
-  // ==== Categories & Exclusions ====
-  const expensesByCategory = useMemo(() => {
-    const sums = new Map<string, number>();
-    for (const tx of txCatItems) {
-      if (tx.transfer_id != null) continue; // transfer legs are not spending
-      if (tx.amount >= 0) continue; // Only expenses
-      const name = (tx.category ?? 'Uncategorized').toString();
-      const lc = name.toLowerCase();
-      if (EXCLUDED_CATEGORIES.has(lc)) continue;
-      const v = Math.abs(tx.amount);
-      if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
-    }
-    const rows = Array.from(sums.entries())
-      .map(([name, value], i) => ({ name, value, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length] }))
-      .sort((a, b) => b.value - a.value);
-    const total = rows.reduce((s, r) => s + r.value, 0);
-    return { rows, total };
-  }, [txCatItems]);
+  const avgNet = flows.length ? (income12 - expense12) / flows.length : 0;
+  const maxFlow = Math.max(1, ...flows.map((f) => Math.max(f.income, f.expense)));
+  const mask = (s: string) => (hidden ? MASK : s);
 
-  const incomeByCategory = useMemo(() => {
-    const sums = new Map<string, number>();
-    for (const tx of txCatItems) {
-      if (tx.transfer_id != null) continue; // transfer legs are not income
-      if (tx.amount <= 0) continue; // Only income
-      const name = (tx.category ?? 'Uncategorized').toString();
-      const lc = name.toLowerCase();
-      if (EXCLUDED_CATEGORIES.has(lc)) continue;
-      const v = tx.amount;
-      if (v > 0) sums.set(name, (sums.get(name) ?? 0) + v);
-    }
-    const rows = Array.from(sums.entries())
-      .map(([name, value], i) => ({ name, value, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length] }))
-      .sort((a, b) => b.value - a.value);
-    const total = rows.reduce((s, r) => s + r.value, 0);
-    return { rows, total };
-  }, [txCatItems]);
-
-  // Savings rate
-  const totalIncome = incomeByCategory.total;
-  const totalExpense = expensesByCategory.total;
-  const savingsRate = totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : 0;
-
-  // Top 5 Expenses
-  const topExpenses = useMemo(() => {
-    return [...txCatItems]
-      .filter(tx => tx.amount < 0 && tx.transfer_id == null && !EXCLUDED_CATEGORIES.has((tx.category ?? '').toLowerCase()))
-      .sort((a, b) => a.amount - b.amount) // smaller negative value means larger expense
-      .slice(0, 5);
-  }, [txCatItems]);
-
-  // Income vs Expenses over time (Bar Chart)
-  const incExpSeries = useMemo(() => {
-    const groupKey = (d: Date) =>
-      groupBy === 'yearly' ? `${d.getFullYear()}` : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-
-    const firstDate = txCatItems.length ? parseISO(txCatItems[0].date) : today;
-    const startAll = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
-    const allKeys = enumerateGroups(startAll, today, groupBy);
-
-    const cutoffKeys =
-      range === 'all' ? allKeys :
-      range === 'ytd' ? allKeys.filter(k => k.startsWith(`${today.getFullYear()}`)) :
-      (() => {
-        const n = range === '6m' ? 6 : range === '12m' ? 12 : range === '24m' ? 24 : range === '36m' ? 36 : 12;
-        return allKeys.slice(-n);
-      })();
-
-    const buckets: Record<string, { income: number, expense: number }> = {};
-    for (const k of allKeys) buckets[k] = { income: 0, expense: 0 };
-
-    for (const tx of txCatItems) {
-      if (tx.transfer_id != null) continue;
-      const k = groupKey(parseISO(tx.date));
-      if (!buckets[k]) continue;
-
-      const lc = (tx.category ?? 'Uncategorized').toString().toLowerCase();
-      if (EXCLUDED_CATEGORIES.has(lc)) continue;
-
-      if (tx.amount > 0) buckets[k].income += tx.amount;
-      else if (tx.amount < 0) buckets[k].expense += Math.abs(tx.amount);
-    }
-
-    return {
-      keys: cutoffKeys,
-      data: cutoffKeys.map(key => ({
-        key,
-        Income: buckets[key].income,
-        Expense: buckets[key].expense,
-      }))
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [txCatItems, groupBy, range]);
-
-  // Shared chart chrome (theme-aware)
-  const axisProps = {
-    tick: { fill: t.tick, fontSize: 12 },
-    axisLine: { stroke: t.axis },
-    tickLine: { stroke: t.axis },
-  };
-  const tooltipStyle = {
-    contentStyle: t.tooltip,
-    itemStyle: { color: t.text },
-    labelStyle: { color: t.tick },
+  const filterCategory = (name: string) => {
+    emit('blotter:filter', { query: name });
+    nav('/');
   };
 
-  const kpiLoading = loading && accounts.length === 0;
-
-  /* =========================
-         UI
-     ========================= */
   return (
-    <PageContainer className="grid gap-6">
-      {/* Top cards */}
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-3 2xl:grid-cols-5">
-        <div className="card p-5">
-          <p className="text-xs text-neutral-500">Total value</p>
-          <div className="mt-1 text-3xl font-bold md:text-4xl">
-            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : <Amount value={totalBalance} hidden={hidden} />}
+    <div className="t-stats" aria-label="Stats">
+      {/* Band 1: KPI rail */}
+      <div className="t-kpis">
+        <div className="t-kpi">
+          <div className="l">TOTAL VALUE</div>
+          <div className="v">{data.loaded ? <Money value={total} hidden={hidden} sign="neg" tone="none" /> : '——'}<span className="u"> €</span></div>
+          <div className="t-spark-row">
+            <Sparkline values={worth} stroke={change != null && change < 0 ? 'var(--neg)' : 'var(--pos)'} />
+            <span className={change != null && change < 0 ? 'neg' : 'pos'}>{change == null ? '— 12M' : hidden ? '••• 12M' : `${formatPercent(change, 1, true).replace(' %', '%')} 12M`}</span>
           </div>
-          <p className="mt-1 text-xs text-neutral-500">Accounts plus balances with people</p>
         </div>
-
-        <div className="card p-5">
-          <p className="text-xs text-neutral-500">Owed to you</p>
-          <div className="mt-1 text-3xl font-bold md:text-4xl">
-            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : (
-              <Amount value={owed} hidden={hidden} colorBySign={false} className={owed > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''} />
-            )}
-          </div>
-          <p className="mt-1 text-xs text-neutral-500">What people still have to pay you</p>
+        <div className="t-kpi">
+          <div className="l">NET THIS MONTH</div>
+          <div className="v"><Money value={net} hidden={hidden} /></div>
+          <div className="s">transfers excluded</div>
         </div>
-
-        <div className="card p-5">
-          <p className="text-xs text-neutral-500">You owe</p>
-          <div className="mt-1 text-3xl font-bold md:text-4xl">
-            {kpiLoading ? <Skeleton className="mt-1 h-9 w-40" /> : (
-              <Amount value={owe} hidden={hidden} colorBySign={false} className={owe > 0 ? 'text-rose-600 dark:text-rose-400' : ''} />
-            )}
-          </div>
-          <p className="mt-1 text-xs text-neutral-500">What you still have to pay people</p>
-        </div>
-
-        <div className="card p-5">
-          <p className="text-xs text-neutral-500">Net this month</p>
-          <div className="mt-1 text-3xl font-bold md:text-4xl">
-            <Amount value={monthNet} hidden={hidden} colorBySign />
-          </div>
-          <p className="mt-1 text-xs text-neutral-500">Transfers excluded</p>
-        </div>
-
-        <div className="card p-5">
-          <p className="text-xs text-neutral-500">Avg savings rate</p>
-          <div
-            className={clsx(
-              'mt-1 text-3xl font-bold md:text-4xl',
-              savingsRate >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-            )}
-          >
-            {catLoading ? <Skeleton className="mt-1 h-9 w-28" /> : hidden ? '***' : `${savingsRate.toFixed(1).replace('.', ',')} %`}
-          </div>
-          <p className="mt-1 text-xs text-neutral-500">Overall (income vs expenses)</p>
-        </div>
-      </section>
-
-      {/* Top Expenses */}
-      {topExpenses.length > 0 && (
-        <section className="card p-5">
-          <h2 className="mb-3 text-base font-semibold">Top expenses (all time)</h2>
-          <div className="grid gap-2">
-            {topExpenses.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between gap-4 border-b border-neutral-200 pb-2 text-sm last:border-0 last:pb-0 dark:border-neutral-800">
-                <div className="min-w-0">
-                  <span className="font-medium tabular-nums">{formatDate(tx.date)}</span>
-                  <span className="ml-2 text-neutral-500">{tx.category ?? 'Uncategorized'}</span>
-                  {tx.description && <div className="mt-0.5 truncate text-xs text-neutral-400">{tx.description}</div>}
+        <div className="t-kpi">
+          <div className="l">SAVINGS RATE · 12M</div>
+          <div className={clsx('v', rate == null ? 'ink2' : rate < 0 ? 'neg' : 'pos')}>{rate == null ? '—' : hidden ? '•••' : formatPercent(rate)}</div>
+          <div className="t-divbars" aria-hidden="true">
+            {flows.map((f) => {
+              const r = savingsRate(f.income, f.expense);
+              const v = r == null ? (f.expense > 0 ? -100 : 0) : r;
+              const h = Math.abs(v) < 0.05 ? 1 : Math.max(2, Math.min(26, (Math.abs(v) / 100) * 26));
+              return (
+                <div key={f.key} title={`${formatMonthKey(f.key)}: ${r == null ? '—' : formatPercent(r)}`}>
+                  <div style={{ height: h, background: v < 0 ? 'var(--neg)' : 'var(--pos)', alignSelf: v < 0 ? 'flex-start' : 'flex-end', marginTop: v < 0 ? 0 : undefined, marginBottom: v < 0 ? undefined : 0 }} />
                 </div>
-                <div className="shrink-0 font-semibold">
-                  <Amount value={tx.amount} hidden={hidden} />
-                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="t-kpi">
+          <div className="l">IN / OUT · ALL TIME</div>
+          <div className="pair">
+            <div><Money value={all.income} hidden={hidden} sign="none" tone="pos" /></div>
+            <div><Money value={all.expense} hidden={hidden} sign="neg" tone="neg" /></div>
+          </div>
+          <div className="s">{all.count} transaction{all.count === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+
+      {/* Band 2: net worth + monthly flows */}
+      <div className="t-band2">
+        <div className="t-pane">
+          <div className="t-pane-head">
+            <span className="t-label">NET WORTH · 12M</span>
+            <span className="t-pane-meta">{worth.length ? `${mask(formatAbs(worth[0], 0))} → ${mask(formatAbs(worth[worth.length - 1], 0))} €` : ''}</span>
+          </div>
+          <NetWorthChart values={worth} />
+          <div className="t-axis">
+            <span>{formatMonthKey(months12[0])}</span>
+            <span>{formatMonthKey(months12[6])}</span>
+            <span>{formatMonthKey(months12[11])}</span>
+          </div>
+        </div>
+        <div className="t-pane">
+          <div className="t-pane-head">
+            <span className="t-label">INCOME VS EXPENSE · MONTHLY</span>
+            <span className="t-pane-meta">Ø {hidden ? MASK : `${avgNet < 0 ? '-' : '+'}${formatAbs(avgNet, 0)}`} €/M</span>
+          </div>
+          <div className="t-bars">
+            {flows.map((f) => (
+              <div key={f.key} title={hidden ? formatMonthKey(f.key) : `${formatMonthKey(f.key)} · in ${formatAbs(f.income)} · out ${formatAbs(f.expense)}`}>
+                <div style={{ height: `${(f.income / maxFlow) * 100}%`, background: 'var(--pos)' }} />
+                <div style={{ height: `${(f.expense / maxFlow) * 100}%`, background: 'var(--neg)' }} />
               </div>
             ))}
           </div>
-        </section>
-      )}
+          <div className="t-axis">
+            <span>{formatMonthKey(months12[0])}</span>
+            <span>{formatMonthKey(months12[11])}</span>
+          </div>
+        </div>
+      </div>
 
-      {/* Split by account (Pie) */}
-      <section className="card p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Total value split by account</h2>
-          {loading && <span className="text-xs text-neutral-500">Loading…</span>}
+      {/* Band 3 */}
+      <div className="t-band3">
+        <div className="t-pane">
+          <div className="t-pane-head">
+            <span className="t-label">SPEND BY CATEGORY · 90D</span>
+            <span className="t-pane-meta">{spend.length} CATEGOR{spend.length === 1 ? 'Y' : 'IES'}</span>
+          </div>
+          {spend.length === 0 ? <div className="t-stats-empty">No expenses in the last 90 days.</div> : <Treemap rows={spend} hidden={hidden} onPick={filterCategory} />}
         </div>
 
-        <div className="mt-3 w-full" style={{ height: 320 }}>
-          <ResponsiveContainer>
-            <PieChart>
-              <Pie
-                data={pieRowsVisible}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={110}
-                stroke={t.surface}
-                label={({ name, percent }: { name?: string; percent?: number }) =>
-                  `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-                }
-              >
-                {pieRowsVisible.map((r) => (
-                  <Cell
-                    key={r.id}
-                    fill={r.color}
-                    cursor="pointer"
-                    onClick={() => toggleAcc(r.id)} // toggle by clicking a slice
-                  />
-                ))}
-              </Pie>
-
-              <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Clickable legend chips (independent toggles for the pie) */}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {pieData.rows.map((r) => {
-            const isOff = isAccHidden(r.id);
-            return (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => toggleAcc(r.id)}
-                aria-pressed={!isOff}
-                className={clsx(
-                  'inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
-                  isOff
-                    ? 'opacity-50 ring-1 ring-neutral-400 hover:opacity-70'
-                    : 'bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700'
-                )}
-                title={isOff ? 'Show account' : 'Hide account'}
-              >
-                <span className="inline-block h-3 w-3 rounded-sm" style={{ background: r.color }} aria-hidden="true" />
-                <span className="whitespace-nowrap">{r.name}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Quick actions */}
-        {pieData.rows.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn btn-secondary h-7 px-2 text-xs"
-              onClick={() => setHiddenAcc(new Set())}
-            >
-              Show all
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary h-7 px-2 text-xs"
-              onClick={() => setHiddenAcc(new Set(pieData.rows.map(r => r.id)))}
-            >
-              Hide all
-            </button>
+        <div className="t-pane">
+          <div className="t-pane-head">
+            <span className="t-label">ALLOCATION</span>
+            <span className="t-pane-meta">{alloc.length} POSITION{alloc.length === 1 ? '' : 'S'}</span>
           </div>
-        )}
-
-        {!loading && pieData.rows.length === 0 && (
-          <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
-        )}
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* Expenses by category (Pie) */}
-        <div className="card p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold">Expenses by category</h2>
-            <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>
-              {catLoading ? 'Loading…' : EXCLUDED_NOTE}
-            </span>
-          </div>
-          <div className="mt-3 w-full" style={{ height: 320 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie
-                  data={expensesByCategory.rows}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={110}
-                  stroke={t.surface}
-                  label={({ name, percent }: { name?: string; percent?: number }) =>
-                    `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-                  }
-                >
-                  {expensesByCategory.rows.map((r, idx) => (
-                    <Cell key={idx} fill={r.color} />
-                  ))}
-                </Pie>
-                <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          {!catLoading && expensesByCategory.rows.length === 0 && (
-            <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
+          {alloc.length === 0 ? (
+            <div className="t-stats-empty">No positive balances yet.</div>
+          ) : (
+            <>
+              <div className="t-alloc-bar" aria-hidden="true">
+                {alloc.map((r) => <div key={r.id} style={{ width: `${r.share * 100}%`, background: r.color }} title={r.name} />)}
+              </div>
+              {alloc.map((r) => (
+                <div key={r.id} className="t-legend-row">
+                  <span className="sq" style={{ background: r.color }} aria-hidden="true" />
+                  <span className="n" title={r.name}>{r.name}</span>
+                  <span className="p">{Math.round(r.share * 100)}%</span>
+                  <span className="v"><Money value={r.value} hidden={hidden} sign="none" tone="none" /></span>
+                </div>
+              ))}
+              <div className="t-note">{allocationNote(alloc)}</div>
+            </>
           )}
         </div>
 
-        {/* Income by category (Pie) */}
-        <div className="card p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold">Income by category</h2>
-            <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>
-              {catLoading ? 'Loading…' : EXCLUDED_NOTE}
-            </span>
+        <div className="t-pane">
+          <div className="t-pane-head">
+            <span className="t-label">TOP EXPENSES · ALL TIME</span>
+            <span className="t-pane-meta">TOP {top.length}</span>
           </div>
-          <div className="mt-3 w-full" style={{ height: 320 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie
-                  data={incomeByCategory.rows}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={110}
-                  stroke={t.surface}
-                  label={({ name, percent }: { name?: string; percent?: number }) =>
-                    `${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`
-                  }
-                >
-                  {incomeByCategory.rows.map((r, idx) => (
-                    <Cell key={idx} fill={r.color} />
-                  ))}
-                </Pie>
-                <RTooltip {...tooltipStyle} formatter={(v: any, n: any) => [fmtMoney(v), n]} />
-              </PieChart>
-            </ResponsiveContainer>
+          {top.length === 0 && <div className="t-stats-empty">No expenses yet.</div>}
+          {top.map((t) => (
+            <div key={t.id} className="t-top-row">
+              <span className="d">{formatDate(t.date)}</span>
+              <span className="c" title={`${t.category ?? '—'}${t.description ? ` · ${t.description}` : ''}`}>
+                {t.category ?? '—'}{t.description && <span> · {t.description}</span>}
+              </span>
+              <span className="v"><Money value={t.amount} hidden={hidden} sign="neg" tone="none" /></span>
+            </div>
+          ))}
+
+          <div className="t-pane-head" style={{ margin: '16px 0 9px' }}>
+            <span className="t-label">BALANCE WITH PEOPLE · 6M</span>
+            <span className="t-pane-meta">{data.people.length} {data.people.length === 1 ? 'PERSON' : 'PEOPLE'}</span>
           </div>
-          {!catLoading && incomeByCategory.rows.length === 0 && (
-            <p className="mt-2 text-sm text-neutral-500">Nothing to show yet.</p>
-          )}
+          {data.people.length === 0 && <div className="t-stats-empty">No people yet.</div>}
+          {peopleSeries.map(({ person, series }) => (
+            <div key={person.id} className="t-person-row">
+              <span className="t-dot" style={{ background: person.color || '#6b7280' }} aria-hidden="true" />
+              <span className="n" title={person.name}>{person.name}</span>
+              <Sparkline values={series} width={110} height={16} vbHeight={14} stroke={person.color || '#6b7280'} pad={1} />
+              <span className="v"><Money value={person.balance} hidden={hidden} /></span>
+            </div>
+          ))}
         </div>
-      </section>
-
-      {/* Income vs Expenses over time */}
-      <section className="card p-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Income vs expenses</h2>
-          <span className="text-xs text-neutral-500" title={EXCLUDED_TITLE}>{EXCLUDED_NOTE}</span>
-        </div>
-        <div className="w-full" style={{ height: 360 }}>
-          <ResponsiveContainer>
-            <BarChart data={incExpSeries.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
-              <XAxis dataKey="key" {...axisProps} />
-              <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
-              <RTooltip {...tooltipStyle} cursor={{ fill: t.cursor }} formatter={(v:any, n:any) => [fmtMoney(v), n]} labelFormatter={(l:any)=> l} />
-              <RLegend wrapperStyle={{ color: t.text }} />
-              <Bar dataKey="Income" fill={t.positive} radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Expense" fill={t.negative} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </section>
-
-      {/* Net worth over time (Lines) */}
-      <section className="card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Value over time</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="mr-2 flex select-none items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={showIndividualAccounts}
-                onChange={e => setShowIndividualAccounts(e.target.checked)}
-              />
-              Show individual accounts
-            </label>
-            <select
-              className="input w-auto"
-              value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-              aria-label="Grouping"
-              title="Grouping"
-            >
-              <option value="monthly">Monthly</option>
-              <option value="yearly">Yearly</option>
-            </select>
-            <select
-              className="input w-auto"
-              value={range}
-              onChange={(e) => setRange(e.target.value as Range)}
-              aria-label="Range"
-              title="Range"
-            >
-              <option value="6m">Last 6m</option>
-              <option value="12m">Last 12m</option>
-              <option value="24m">Last 24m</option>
-              <option value="36m">Last 36m</option>
-              <option value="ytd">YTD</option>
-              <option value="all">All time</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-3 w-full" style={{ height: 360 }}>
-          <ResponsiveContainer>
-            {showIndividualAccounts ? (
-              <LineChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
-                <XAxis dataKey="key" {...axisProps} />
-                <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
-                <RTooltip
-                  {...tooltipStyle}
-                  cursor={{ stroke: t.axis }}
-                  formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
-                  labelFormatter={(l:any)=> l}
-                />
-                <RLegend
-                  wrapperStyle={{ color: t.text }}
-                  onClick={(entry: any) => {
-                    const key = entry?.dataKey as string | undefined;
-                    if (!key || key === 'total') return;
-                    if (key.startsWith('acc_')) {
-                      const id = Number(key.slice(4));
-                      if (Number.isFinite(id)) toggleAcc(id);
-                    }
-                  }}
-                />
-                {accountLines.map((l) => (
-                  <Line
-                    key={l.id}
-                    type="monotone"
-                    dataKey={l.key}
-                    name={l.name}
-                    stroke={l.color}
-                    strokeWidth={1.8}
-                    dot={false}
-                    hide={isAccHidden(l.id)}
-                  />
-                ))}
-                {series.data.length > 20 && <Brush dataKey="key" height={20} stroke={t.axis} fill={t.surface} />}
-              </LineChart>
-            ) : (
-              <AreaChart data={series.data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={t.accent} stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor={t.accent} stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={t.grid} />
-                <XAxis dataKey="key" {...axisProps} />
-                <YAxis tickFormatter={fmtMoneyShort} {...axisProps} />
-                <RTooltip
-                  {...tooltipStyle}
-                  cursor={{ stroke: t.axis }}
-                  formatter={(v:any, n:any) => [fmtMoney(v), legendName(n, accounts)]}
-                  labelFormatter={(l:any)=> l}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="total"
-                  name="Total net worth"
-                  stroke={t.accent}
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#colorTotal)"
-                />
-                {series.data.length > 20 && <Brush dataKey="key" height={20} stroke={t.axis} fill={t.surface} />}
-              </AreaChart>
-            )}
-          </ResponsiveContainer>
-        </div>
-      </section>
-    </PageContainer>
+      </div>
+    </div>
   );
 }
 
-/* ========== helpers ========== */
-function iso(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+function NetWorthChart({ values }: { values: number[] }) {
+  const pts = sparkPoints(values, 40, 3);
+  return (
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" style={{ width: '100%', height: 176, display: 'block' }} aria-hidden="true">
+      <line x1="0" y1="10" x2="100" y2="10" stroke="var(--grid-chart)" strokeWidth=".4" />
+      <line x1="0" y1="25" x2="100" y2="25" stroke="var(--grid-chart)" strokeWidth=".4" />
+      {pts && (
+        <>
+          <path d={`M${pts.split(' ').join(' L')} L100,40 L0,40 Z`} fill="var(--pos)" opacity=".1" />
+          <polyline points={pts} fill="none" stroke="var(--pos)" strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+        </>
+      )}
+    </svg>
+  );
 }
-function parseISO(s: string) {
-  const [y,m,d] = s.split('-').map(Number);
-  return new Date(y, (m||1)-1, d||1);
+
+/* ---------- treemap ---------- */
+
+type Tile = { row: CategorySpend; rank: number };
+
+function Treemap({ rows, hidden, onPick }: { rows: CategorySpend[]; hidden: boolean; onPick: (name: string) => void }) {
+  const shown = rows.slice(0, 9);
+  const more = rows.length - shown.length;
+  // Column split as in the handoff: 2 / 3 / 4 tiles, weighted 5 / 3 / 2.
+  const split = shown.length <= 2 ? [shown.length] : shown.length <= 5 ? [2, shown.length - 2] : [2, 3, shown.length - 5];
+  const weights = [5, 3, 2];
+  const cols: { flex: number; tiles: Tile[] }[] = [];
+  let i = 0;
+  split.forEach((n, ci) => {
+    const tiles = shown.slice(i, i + n).map((row, k) => ({ row, rank: i + k }));
+    i += n;
+    cols.push({ flex: weights[ci] ?? 2, tiles });
+  });
+  const rankClass = (r: number) => (r === 0 ? 'r1' : r === 1 ? 'r2' : r === 2 ? 'r3' : r <= 4 ? 'r4' : 'r5');
+  const minFlex = 0.6;
+  return (
+    <div className="t-treemap" role="list">
+      {cols.map((c, ci) => {
+        const colTotal = c.tiles.reduce((s, t) => s + t.row.value, 0) || 1;
+        return (
+          <div key={ci} style={{ flex: c.flex }}>
+            {c.tiles.map((t) => (
+              <button
+                key={t.row.name}
+                type="button"
+                role="listitem"
+                className={clsx('t-tile', rankClass(t.rank))}
+                style={{ flex: Math.max(minFlex, (t.row.value / colTotal) * c.tiles.length), background: `var(--tm-${t.rank + 1})` }}
+                title={`${t.row.name}: filter the blotter`}
+                onClick={() => onPick(t.row.name)}
+              >
+                <div className="n">{t.row.name}</div>
+                <div className="v">{hidden ? MASK : `-${formatAbs(t.row.value)}`}</div>
+                {t.rank === 0 && <div className="m">{Math.round(t.row.share * 100)}% · {t.row.count} tx</div>}
+              </button>
+            ))}
+            {ci === cols.length - 1 && more > 0 && (
+              <div className="t-tile more" style={{ flex: minFlex, background: 'var(--tm-9)' }}>
+                <div className="n">+ {more} more</div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
-function enumerateGroups(from: Date, to: Date, groupBy: 'monthly'|'yearly') {
-  const out: string[] = [];
-  if (groupBy === 'yearly') {
-    let y = from.getFullYear();
-    const yEnd = to.getFullYear();
-    for (; y <= yEnd; y++) out.push(String(y));
-  } else {
-    let cur = new Date(from.getFullYear(), from.getMonth(), 1);
-    const end = new Date(to.getFullYear(), to.getMonth(), 1);
-    while (cur <= end) {
-      out.push(`${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`);
-      cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
-    }
-  }
-  return out;
+
+function allocationNote(rows: ReturnType<typeof allocation>): string {
+  if (rows.length === 0) return '';
+  const top = rows[0];
+  const first = `${shortName(top.name)} holds ${Math.round(top.share * 100)}% of total value.`;
+  const rest = rows.slice(1);
+  if (rest.length === 0) return first;
+  const restShare = Math.round(rest.reduce((s, r) => s + r.share, 0) * 100);
+  const names = rest.length <= 3 ? joinNames(rest.map((r) => shortName(r.name))) : `The other ${rest.length} positions`;
+  return `${first}\n${names} together ${restShare}%.`;
 }
-// pretty money formatters (for tooltips/axis) — same de-DE / EUR convention as <Amount>
-function fmtMoney(v: number) {
-  return formatMoneyDE(v ?? 0, { maximumFractionDigits: 0 });
+
+function shortName(n: string): string {
+  return n.split(' ')[0];
 }
-function fmtMoneyShort(v: number) {
-  const n = Math.abs(v);
-  const sign = v < 0 ? '-' : '';
-  if (n >= 1_000_000) return `${sign}${(n/1_000_000).toFixed(1).replace('.', ',')} M`;
-  if (n >= 1_000) return `${sign}${(n/1_000).toFixed(1).replace('.', ',')} k`;
-  return `${sign}${Math.round(n)}`;
-}
-function legendName(key: string, accounts: Account[]) {
-  if (key === 'total') return 'Total';
-  if (key?.startsWith('acc_')) {
-    const id = Number(key.slice(4));
-    const a = accounts.find(x => x.id === id);
-    return a?.name ?? key;
-  }
-  return key;
+
+function joinNames(ns: string[]): string {
+  if (ns.length <= 1) return ns.join('');
+  return `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
 }

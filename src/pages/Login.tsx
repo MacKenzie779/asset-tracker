@@ -1,15 +1,12 @@
-// src/pages/Login.tsx
+// src/pages/Login.tsx — unlock screen in the terminal skin.
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import clsx from "clsx";
 import { createDatabase, openDatabase } from "../lib/api";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import Modal from "../components/Modal";
-import { IconEye, IconEyeOff, IconPlus } from "../components/icons";
+import AppVersion from "../components/AppVersion";
 import { errorMessage } from "../lib/errors";
-import loginBg from "../assets/wallpaper/sajad.jpg";
-
-// Optional wallpaper (leave empty for gradient background)
-const WALLPAPER_URL = loginBg;
 
 export default function Login() {
   const [path, setPath] = useState("");
@@ -37,14 +34,14 @@ export default function Login() {
 
   function validateLogin(): string | null {
     if (!path) return "Choose a database file.";
-    if (!pw) return "Enter your password.";
+    if (!pw) return "Enter your passphrase.";
     return null;
   }
 
   function validateCreate(): string | null {
     if (!cPath) return "Choose a file path.";
-    if (!cPw) return "Enter a password.";
-    if (cPw !== cPw2) return "Passwords do not match.";
+    if (!cPw) return "Enter a passphrase.";
+    if (cPw !== cPw2) return "Passphrases do not match.";
     return null;
   }
 
@@ -81,7 +78,7 @@ export default function Login() {
       sessionStorage.setItem("db_unlocked", "1");        // re-auth each launch
       localStorage.setItem("db_last_path", path);        // convenience only
       if (result.migrated) {
-        // Home shows a one-time notice about the upgrade and the backup.
+        // The shell shows a one-time notice about the upgrade and the backup.
         sessionStorage.setItem("db_upgrade_notice", JSON.stringify(result));
       }
       nav("/");
@@ -105,111 +102,78 @@ export default function Login() {
       setCreateOpen(false);
       nav("/");
     } catch (e: unknown) {
+      setErr("");
       setCErr(errorMessage(e, "Could not create the database."));
     } finally {
       setCBusy(false);
     }
   }
 
-  const bgStyle = WALLPAPER_URL
-    ? { backgroundImage: `url(${WALLPAPER_URL})`, backgroundSize: "cover", backgroundPosition: "center" }
-    : undefined;
-
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Background */}
-      <div
-        className={`absolute inset-0 ${WALLPAPER_URL ? "" : "bg-gradient-to-br from-neutral-900 via-neutral-800 to-neutral-900"} `}
-        style={bgStyle}
-      />
-      {/* Readability overlay */}
-      <div className="absolute inset-0 bg-black/40" />
-
-      {/* Center card */}
-      <div className="relative z-10 flex min-h-screen items-center justify-center p-6">
-        <div className="w-full max-w-lg rounded-3xl border border-white/15 bg-white/70 shadow-xl backdrop-blur-xl dark:bg-neutral-900/60">
-          <div className="p-7 md:p-8">
-            <div className="mb-6">
-              <h1 className="text-2xl font-semibold text-neutral-900 dark:text-neutral-50">
-                Welcome back
-              </h1>
-              <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                Unlock your encrypted database to continue.
-              </p>
-            </div>
-
-            {/* Login form */}
-            <form onSubmit={submitLogin} className="space-y-4" noValidate>
-              <div>
-                <label htmlFor="login-path" className="mb-1 block text-sm text-neutral-800 dark:text-neutral-200">
-                  Database file
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    id="login-path"
-                    className="input flex-1"
-                    placeholder="Select your encrypted .db"
-                    value={path}
-                    onChange={(e) => setPath(e.target.value)}
-                  />
-                  <button type="button" onClick={browseOpen} className="btn shrink-0">
-                    Browse…
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="login-password" className="mb-1 block text-sm text-neutral-800 dark:text-neutral-200">
-                  Password
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    id="login-password"
-                    type={showPw ? "text" : "password"}
-                    className="input"
-                    value={pw}
-                    onChange={(e) => setPw(e.target.value)}
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPw((s) => !s)}
-                    className="btn shrink-0"
-                    aria-label={showPw ? "Hide password" : "Show password"}
-                    aria-pressed={showPw}
-                    title={showPw ? "Hide password" : "Show password"}
-                  >
-                    {showPw ? <IconEyeOff /> : <IconEye />}
-                  </button>
-                </div>
-              </div>
-
-              {err && (
-                <div role="alert" className="text-sm text-rose-600 dark:text-rose-400">
-                  {err}
-                </div>
-              )}
-
-              <div className="pt-2">
-                <button type="submit" disabled={busy} className="btn btn-primary w-full">
-                  {busy ? "Unlocking…" : "Unlock"}
-                </button>
-              </div>
-            </form>
-          </div>
+    <div className="t-app t-login">
+      <div className="t-login-panel" role="main" aria-labelledby="login-title">
+        <div className="t-login-head">
+          <span className="t-wordmark">ASSETTRACKER</span>
+          <div className="t-vdiv" aria-hidden="true" />
+          <span id="login-title" className="t-label">UNLOCK</span>
+          <div className="t-spacer" />
+          <span className="t-login-version"><AppVersion /></span>
         </div>
-      </div>
 
-      {/* Floating Create button */}
-      <div className="pointer-events-none absolute inset-0 z-10">
-        <div className="pointer-events-auto absolute bottom-6 right-6">
-          <button
-            type="button"
-            onClick={() => { setCreateOpen(true); setCErr(""); }}
-            className="btn rounded-full border-white/20 bg-white/80 px-5 py-3 text-neutral-900 shadow-lg backdrop-blur-xl hover:bg-white dark:border-neutral-800/60 dark:bg-neutral-900/80 dark:text-neutral-50 dark:hover:bg-neutral-900"
-          >
-            <IconPlus className="h-4 w-4" strokeWidth={2} />
-            Create new database
+        <form onSubmit={submitLogin} className="t-login-body" noValidate>
+          <div className="t-field">
+            <label htmlFor="login-path" className="t-label">DATABASE FILE</label>
+            <div className="t-frow">
+              <input
+                id="login-path"
+                className={clsx("t-in", err && !path && "is-invalid")}
+                placeholder="select your encrypted .db"
+                value={path}
+                spellCheck={false}
+                onChange={(e) => setPath(e.target.value)}
+              />
+              <button type="button" onClick={() => void browseOpen()} className="t-btn t-btn--secondary">BROWSE…</button>
+            </div>
+          </div>
+
+          <div className="t-field">
+            <label htmlFor="login-password" className="t-label">PASSPHRASE</label>
+            <div className="t-frow">
+              <input
+                id="login-password"
+                type={showPw ? "text" : "password"}
+                className={clsx("t-in", err && !pw && "is-invalid")}
+                placeholder="•••••••••"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw((s) => !s)}
+                className="t-btn t-btn--secondary"
+                aria-label={showPw ? "Hide passphrase" : "Show passphrase"}
+                aria-pressed={showPw}
+              >
+                {showPw ? "HIDE" : "SHOW"}
+              </button>
+            </div>
+          </div>
+
+          {err && (
+            <div role="alert" className="t-login-err">{err}</div>
+          )}
+
+          <button type="submit" disabled={busy} className="t-btn t-btn--primary t-btn--wide t-login-submit">
+            {busy ? "UNLOCKING…" : "UNLOCK ⏎"}
+          </button>
+        </form>
+
+        <div className="t-login-foot">
+          <span>SQLCipher-encrypted · the passphrase never touches the disk</span>
+          <div className="t-spacer" />
+          <button type="button" className="t-btn--text" onClick={() => { setCreateOpen(true); setCErr(""); }}>
+            + NEW DATABASE
           </button>
         </div>
       </div>
@@ -218,84 +182,72 @@ export default function Login() {
       <Modal
         open={createOpen}
         onClose={() => { if (!cBusy) setCreateOpen(false); }}
-        title="Create encrypted database"
-        size="xl"
+        title="CREATE ENCRYPTED DATABASE"
+        size="lg"
         initialFocus={cPathRef}
-        panelClassName="border-white/15 bg-white/85 backdrop-blur-xl dark:border-neutral-800/60 dark:bg-neutral-900/85"
       >
-        <form onSubmit={submitCreate} className="space-y-4" noValidate>
-          <div>
-            <label htmlFor="create-path" className="mb-1 block text-sm text-neutral-800 dark:text-neutral-200">File path</label>
-            <div className="flex gap-2">
+        <form onSubmit={submitCreate} className="t-login-body" style={{ padding: 0 }} noValidate>
+          <div className="t-field">
+            <label htmlFor="create-path" className="t-label">FILE PATH</label>
+            <div className="t-frow">
               <input
                 id="create-path"
                 ref={cPathRef}
-                className="input flex-1"
-                placeholder="Where to create, e.g. ~/Documents/assettracker.db"
+                className="t-in"
+                placeholder="where to create, e.g. ~/Documents/assettracker.db"
                 value={cPath}
+                spellCheck={false}
                 onChange={(e) => setCPath(e.target.value)}
               />
-              <button type="button" onClick={browseCreate} className="btn shrink-0">
-                Browse…
-              </button>
+              <button type="button" onClick={() => void browseCreate()} className="t-btn t-btn--secondary">BROWSE…</button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>
-              <label htmlFor="create-password" className="mb-1 block text-sm text-neutral-800 dark:text-neutral-200">Password</label>
-              <div className="flex gap-2">
+          <div className="t-frow" style={{ alignItems: "flex-start", gap: 12 }}>
+            <div className="t-field" style={{ flex: 1 }}>
+              <label htmlFor="create-password" className="t-label">PASSPHRASE</label>
+              <div className="t-frow">
                 <input
                   id="create-password"
                   type={cShowPw ? "text" : "password"}
-                  className="input"
+                  className="t-in"
                   value={cPw}
                   onChange={(e) => setCPw(e.target.value)}
                 />
                 <button
                   type="button"
                   onClick={() => setCShowPw((s) => !s)}
-                  className="btn shrink-0"
-                  aria-label={cShowPw ? "Hide password" : "Show password"}
+                  className="t-btn t-btn--secondary"
+                  aria-label={cShowPw ? "Hide passphrase" : "Show passphrase"}
                   aria-pressed={cShowPw}
-                  title={cShowPw ? "Hide password" : "Show password"}
                 >
-                  {cShowPw ? <IconEyeOff /> : <IconEye />}
+                  {cShowPw ? "HIDE" : "SHOW"}
                 </button>
               </div>
             </div>
-
-            <div>
-              <label htmlFor="create-password2" className="mb-1 block text-sm text-neutral-800 dark:text-neutral-200">Confirm password</label>
+            <div className="t-field" style={{ flex: 1 }}>
+              <label htmlFor="create-password2" className="t-label">CONFIRM</label>
               <input
                 id="create-password2"
                 type={cShowPw ? "text" : "password"}
-                className="input"
+                className={clsx("t-in", cPw2 && cPw !== cPw2 && "is-invalid")}
                 value={cPw2}
                 onChange={(e) => setCPw2(e.target.value)}
               />
             </div>
           </div>
 
-          {cErr && (
-            <div role="alert" className="text-sm text-rose-600 dark:text-rose-400">
-              {cErr}
-            </div>
-          )}
+          {cErr && <div role="alert" className="t-login-err">{cErr}</div>}
 
-          <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={() => setCreateOpen(false)} className="btn" disabled={cBusy}>
-              Cancel
-            </button>
-            <button type="submit" disabled={cBusy} className="btn btn-primary">
-              {cBusy ? "Creating…" : "Create & Unlock"}
-            </button>
+          <div className="t-frow" style={{ justifyContent: "flex-end", gap: 6 }}>
+            <button type="button" onClick={() => setCreateOpen(false)} className="t-btn t-btn--secondary" disabled={cBusy}>CANCEL</button>
+            <button type="submit" disabled={cBusy} className="t-btn t-btn--primary">{cBusy ? "CREATING…" : "CREATE & UNLOCK ⏎"}</button>
           </div>
-        </form>
 
-        <p className="mt-4 text-xs text-neutral-500 dark:text-neutral-400">
-          Your database is encrypted with SQLCipher. There is no way to recover a lost password — keep it safe.
-        </p>
+          <p className="t-help" style={{ marginTop: 2 }}>
+            There is no way to recover a lost passphrase — keep it safe, and back up the .db file itself.
+          </p>
+        </form>
       </Modal>
     </div>
   );

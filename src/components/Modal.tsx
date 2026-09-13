@@ -41,9 +41,20 @@ const FOCUSABLE =
 
 let openCount = 0;
 
-/** True while at least one Modal is mounted and open. Used to silence global shortcuts. */
+/** True while at least one Modal or overlay is open. Used to silence global shortcuts. */
 export function isAnyModalOpen(): boolean {
   return openCount > 0;
+}
+
+/** Overlays that are not built on Modal (palette, settle sheet) register here while open. */
+export function useOverlayOpen(open: boolean) {
+  useEffect(() => {
+    if (!open) return;
+    openCount += 1;
+    return () => {
+      openCount = Math.max(0, openCount - 1);
+    };
+  }, [open]);
 }
 
 /**
@@ -158,8 +169,7 @@ export default function Modal({
         className={clsx(
           'relative z-10 w-[92vw] rounded-2xl border shadow-xl outline-none motion-safe:animate-modal-in',
           SIZE[size],
-          panelClassName ??
-            'bg-white dark:bg-neutral-900 border-neutral-200/60 dark:border-neutral-800/60'
+          panelClassName ?? 't-modal !rounded'
         )}
       >
         <div className="p-5">
@@ -171,7 +181,7 @@ export default function Modal({
           {description ? (
             <div
               id={descId}
-              className="mt-2 whitespace-pre-line break-words text-sm text-neutral-600 dark:text-neutral-400"
+              className="t-modal-desc mt-2 whitespace-pre-line break-words text-sm text-neutral-600 dark:text-neutral-400"
             >
               {description}
             </div>

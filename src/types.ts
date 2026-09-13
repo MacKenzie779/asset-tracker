@@ -77,7 +77,7 @@ export type OpenDatabaseResult = {
   backup_path: string | null;
 };
 
-export type TxTypeFilter = 'all' | 'income' | 'expense';
+export type TxTypeFilter = 'all' | 'income' | 'expense' | 'transfer';
 export type TxSortBy = 'date' | 'category' | 'description' | 'amount' | 'account' | 'id';
 export type TxSortDir = 'asc' | 'desc';
 

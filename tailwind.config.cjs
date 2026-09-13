@@ -6,11 +6,8 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['ui-sans-serif', 'system-ui', 'Inter', 'Arial', 'sans-serif']
-      },
-      // The transaction add-row uses a 45-column grid on md+; Tailwind only ships col-span-1..12.
-      gridColumn: {
-        'span-13': 'span 13 / span 13',
+        sans: ['IBM Plex Sans', 'system-ui', 'Segoe UI', 'Arial', 'sans-serif'],
+        mono: ['Azeret Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace']
       },
       keyframes: {
         'modal-in': {

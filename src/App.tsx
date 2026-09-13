@@ -5,11 +5,10 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-route
 import './index.css';
 import Layout from './components/Layout';
 import { ToastProvider } from './components/Toast';
-import Home from './pages/Home';
-import Accounts from './pages/Accounts';
-import Transactions from './pages/Transactions';
+import { DataProvider } from './lib/data';
+import { ShellProvider, useShell, type LedgerTab } from './lib/shell';
+import Terminal from './pages/Terminal';
 import Stats from './pages/Stats';
-import Categories from './pages/Categories';
 import Login from './pages/Login';
 
 function Guard({ children }: { children: JSX.Element }) {
@@ -41,8 +40,15 @@ function Guard({ children }: { children: JSX.Element }) {
   }, [nav]);
 
   // Themed blank while the session check runs (avoids a white flash).
-  if (ok === null) return <div className="h-screen bg-neutral-50 dark:bg-neutral-950" aria-busy="true" />;
+  if (ok === null) return <div className="h-screen" style={{ background: 'var(--ground)' }} aria-busy="true" />;
   return ok ? children : null;
+}
+
+/** The old per-page routes land in the terminal with the ledger column on the matching tab. */
+function LedgerRedirect({ tab }: { tab: LedgerTab }) {
+  const shell = useShell();
+  useEffect(() => { shell.requestLedger(tab); }, [shell, tab]);
+  return <Navigate to="/" replace />;
 }
 
 export default function App() {
@@ -51,12 +57,22 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route element={<Guard><Layout /></Guard>}>
-            <Route path="/" element={<Home />} />
-            <Route path="/accounts" element={<Accounts />} />
-            <Route path="/transactions" element={<Transactions />} />
+          <Route
+            element={
+              <Guard>
+                <ShellProvider>
+                  <DataProvider>
+                    <Layout />
+                  </DataProvider>
+                </ShellProvider>
+              </Guard>
+            }
+          >
+            <Route path="/" element={<Terminal />} />
             <Route path="/stats" element={<Stats />} />
-            <Route path="/categories" element={<Categories />} />
+            <Route path="/transactions" element={<Navigate to="/" replace />} />
+            <Route path="/accounts" element={<LedgerRedirect tab="accounts" />} />
+            <Route path="/categories" element={<LedgerRedirect tab="categories" />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

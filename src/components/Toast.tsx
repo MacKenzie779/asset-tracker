@@ -9,8 +9,6 @@ import {
   type ReactNode,
 } from 'react';
 import clsx from 'clsx';
-import IconButton from './IconButton';
-import { IconAlertTriangle, IconCheckCircle, IconInfo, IconX } from './icons';
 
 export type ToastKind = 'success' | 'error' | 'info';
 
@@ -156,11 +154,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div
-        aria-live="polite"
-        aria-relevant="additions"
-        className="pointer-events-none fixed right-4 top-16 z-[70] flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2"
-      >
+      <div aria-live="polite" aria-relevant="additions" className="t-toasts">
         {itemsRef.current.map((t) => (
           <ToastCard
             key={t.id}
@@ -175,11 +169,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const KIND_ICON = {
-  success: { Icon: IconCheckCircle, cls: 'text-emerald-600 dark:text-emerald-400' },
-  error: { Icon: IconAlertTriangle, cls: 'text-rose-600 dark:text-rose-400' },
-  info: { Icon: IconInfo, cls: 'text-blue-600 dark:text-blue-400' },
-} as const;
+const KIND_LABEL: Record<ToastKind, string> = { success: 'OK', error: 'ERR', info: 'INFO' };
 
 function ToastCard({
   item,
@@ -192,7 +182,6 @@ function ToastCard({
   onPause: () => void;
   onResume: () => void;
 }) {
-  const { Icon, cls } = KIND_ICON[item.kind];
   return (
     <div
       role={item.kind === 'error' ? 'alert' : 'status'}
@@ -200,27 +189,19 @@ function ToastCard({
       onMouseLeave={onResume}
       onFocus={onPause}
       onBlur={onResume}
-      className={clsx(
-        'pointer-events-auto flex items-start gap-3 rounded-xl border p-3 shadow-lg',
-        'border-neutral-200/60 bg-white dark:border-neutral-800/60 dark:bg-neutral-900',
-        'motion-safe:animate-toast-in'
-      )}
+      className="t-toast"
     >
-      <Icon className={clsx('mt-0.5 h-[18px] w-[18px] shrink-0', cls)} />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">{item.title}</p>
-        {item.description ? (
-          <div className="mt-0.5 break-words text-sm text-neutral-500 dark:text-neutral-400">
-            {item.description}
-          </div>
-        ) : null}
+      <span className={clsx('k mono', item.kind)}>{KIND_LABEL[item.kind]}</span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p className="t">{item.title}</p>
+        {item.description ? <div className="d">{item.description}</div> : null}
         {item.actions && item.actions.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="a">
             {item.actions.map((a) => (
               <button
                 key={a.label}
                 type="button"
-                className="btn btn-secondary h-7 px-2 text-xs"
+                className="t-btn t-btn--secondary t-btn--sm"
                 onClick={async () => {
                   try {
                     await a.onClick();
@@ -235,9 +216,7 @@ function ToastCard({
           </div>
         ) : null}
       </div>
-      <IconButton size="sm" label="Dismiss" onClick={onDismiss} className="-mr-1 -mt-1">
-        <IconX className="h-4 w-4" />
-      </IconButton>
+      <button type="button" className="x mono" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>✕</button>
     </div>
   );
 }

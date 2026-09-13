@@ -48,3 +48,29 @@ function toISO(dt: Date): string {
   const yyyy = dt.getFullYear();
   return `${yyyy}-${mm}-${dd}`;
 }
+
+// 'YYYY-MM-DD' -> 'dd.mm.yy' (blotter rows)
+export function formatDateShort(d: string): string {
+  const m = d.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : d;
+}
+
+// 'YYYY-MM-DD' -> 'dd.mm' (settle sheet items)
+export function formatDayMonth(d: string): string {
+  const m = d.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}` : d;
+}
+
+// Date -> 'YYYY-MM-DD'
+export function toISODate(dt: Date): string {
+  return toISO(dt);
+}
+
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+// 'YYYY-MM' -> 'SEP 26' (chart axes)
+export function formatMonthKey(key: string): string {
+  const m = key.match(/^(\d{4})-(\d{2})/);
+  if (!m) return key;
+  return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1].slice(2)}`;
+}

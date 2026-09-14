@@ -13,6 +13,8 @@ import { readExportConfig } from '../../lib/exportConfig';
 import { formatAbs, parseDecimal } from '../../lib/number';
 import { todayDE, parseDateDEToISO } from '../../lib/format';
 import { useShell } from '../../lib/shell';
+import { useI18n } from '../../hooks/useI18n';
+import { setLang } from '../../lib/i18n';
 import { setThemePreference } from '../../lib/theme';
 import { formatKeys } from '../../lib/shortcuts';
 import type { Account, Category } from '../../types';
@@ -48,6 +50,7 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
   const nav = useNavigate();
   const toast = useToast();
   const data = useData();
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [hl, setHl] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -57,8 +60,8 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
     if (!open) return;
     setQuery('');
     setHl(0);
-    const t = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
+    const handle = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.clearTimeout(handle);
   }, [open]);
 
   const close = shell.closePalette;
@@ -73,11 +76,11 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
     const parsed = parseShorthand(q, data.categories, data.accounts);
     if (parsed) {
       const acc = parsed.account ?? defaultAccount(data.accounts);
-      const dirLabel = parsed.direction === 'in' ? 'Income' : parsed.direction === 'trf' ? 'Transfer' : 'Expense';
+      const dirLabel = parsed.direction === 'in' ? t('type.income') : parsed.direction === 'trf' ? t('type.transfer') : t('type.expense');
       const parts = [dirLabel, `${formatAbs(parsed.amount)} €`];
       if (parsed.category) parts.push(parsed.category);
-      else parts.push('pick a category…');
-      if (parsed.direction !== 'trf') parts.push(acc ? acc.name : 'pick an account…');
+      else parts.push(t('palette.pickCategory'));
+      if (parsed.direction !== 'trf') parts.push(acc ? acc.name : t('palette.pickAccount'));
       if (parsed.notes) parts.push(`“${parsed.notes}”`);
       const prefill: QuickEntryPrefill = {
         direction: parsed.direction,
@@ -93,7 +96,7 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
         id: 'new',
         kind: 'NEW',
         label: parts.join(' · '),
-        hint: complete ? '⏎' : '⏎ → quick entry',
+        hint: complete ? '⏎' : t('palette.toQuickEntry'),
         completion: parsed.completion,
         run: async () => {
           if (!complete || !acc) { toQuickEntry(); return; }
@@ -106,11 +109,11 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
               category: parsed.category,
               description: parsed.notes || null,
             });
-            toast.success(`${dirLabel} committed`, { description: `${formatAbs(parsed.amount)} € · ${parsed.category} · ${acc.name}` });
+            toast.success(t(parsed.direction === 'in' ? 'commit.income' : 'commit.expense'), { description: `${formatAbs(parsed.amount)} € · ${parsed.category} · ${acc.name}` });
             afterMutation();
             close();
           } catch (e) {
-            toast.error('Could not commit', { description: errorMessage(e) });
+            toast.error(t('commit.failed'), { description: errorMessage(e) });
           }
         },
         alt: toQuickEntry,
@@ -124,14 +127,14 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
         .filter((c) => c.name.toLowerCase().includes(ql))
         .slice(0, 4)
         .forEach((c) =>
-          out.push({ id: `cat-${c.id}`, kind: 'GO', label: `Filter blotter → category ${c.name}`, completion: c.name,
+          out.push({ id: `cat-${c.id}`, kind: 'GO', label: t('palette.filterCategory', { name: c.name }), completion: c.name,
             run: () => { nav('/'); emit('blotter:filter', { query: c.name }); close(); } })
         );
       data.accounts
         .filter((a) => a.name.toLowerCase().includes(ql))
         .slice(0, 4)
         .forEach((a) =>
-          out.push({ id: `acc-${a.id}`, kind: 'GO', label: `Filter blotter → ${a.type === 'person' ? 'person' : 'account'} ${a.name}`, completion: a.name,
+          out.push({ id: `acc-${a.id}`, kind: 'GO', label: t(a.type === 'person' ? 'palette.filterPerson' : 'palette.filterAccount', { name: a.name }), completion: a.name,
             run: () => { nav('/'); emit('blotter:filter', { accountId: a.id }); close(); } })
         );
     }
@@ -139,33 +142,35 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
     // --- static commands ---
     const cfg = readExportConfig();
     const statics: Item[] = [
-      { id: 'go-terminal', kind: 'GO', label: 'Terminal', hint: mod('1'), keywords: 'blotter ledger home transactions', run: () => go('/') },
-      { id: 'go-stats', kind: 'GO', label: 'Stats', hint: mod('2'), keywords: 'charts statistics analytics', run: () => go('/stats') },
-      { id: 'run-new', kind: 'RUN', label: 'New transaction', hint: mod('N'), keywords: 'add quick entry commit', run: () => { nav('/'); emit('focus:quick-entry'); close(); } },
+      { id: 'go-terminal', kind: 'GO', label: t('palette.goTerminal'), hint: mod('1'), keywords: t('palette.goTerminal.kw'), run: () => go('/') },
+      { id: 'go-stats', kind: 'GO', label: t('palette.goStats'), hint: mod('2'), keywords: t('palette.goStats.kw'), run: () => go('/stats') },
+      { id: 'run-new', kind: 'RUN', label: t('palette.newTx'), hint: mod('N'), keywords: t('palette.newTx.kw'), run: () => { nav('/'); emit('focus:quick-entry'); close(); } },
       ...data.people
         .filter((p) => Math.abs(p.balance) > 0.005)
         .map<Item>((p) => ({
-          id: `settle-${p.id}`, kind: 'RUN', keywords: 'settle up pay balance person',
-          label: `Settle up with ${p.name} — ${formatAbs(p.balance)} €`, hint: mod('S'),
+          id: `settle-${p.id}`, kind: 'RUN', keywords: t('palette.settleWith.kw'),
+          label: t('palette.settleWith', { name: p.name, amount: formatAbs(p.balance) }), hint: mod('S'),
           run: () => { shell.openSettle(p.id); close(); },
         })),
       ...data.people.map<Item>((p) => ({
-        id: `stmt-${p.id}`, kind: 'RUN', keywords: 'statement settlement export pdf xlsx person',
-        label: `Settlement statement for ${p.name}…`,
+        id: `stmt-${p.id}`, kind: 'RUN', keywords: t('palette.statementFor.kw'),
+        label: t('palette.statementFor', { name: p.name }),
         run: () => { shell.openSettle(p.id); close(); },
       })),
-      { id: 'run-export', kind: 'RUN', label: `Export filtered result as ${cfg.format.toUpperCase()}`, hint: mod('E'), keywords: 'export xlsx pdf download', run: () => { nav('/'); emit('export'); close(); } },
-      { id: 'go-accounts', kind: 'GO', label: 'Ledger column → ACCOUNTS', hint: mod(','), keywords: 'manage accounts people add rename delete', run: () => { nav('/'); shell.requestLedger('accounts'); close(); } },
-      { id: 'go-categories', kind: 'GO', label: 'Ledger column → CATEGORIES', keywords: 'manage categories add rename delete', run: () => { nav('/'); shell.requestLedger('categories'); close(); } },
-      { id: 'go-ledger', kind: 'GO', label: 'Ledger column → LEDGER', keywords: 'position accounts people export', run: () => { nav('/'); shell.requestLedger('ledger'); close(); } },
-      { id: 'run-clear', kind: 'RUN', label: 'Clear blotter filters', keywords: 'reset filter search all', run: () => { nav('/'); emit('blotter:filter', { clear: true }); close(); } },
-      { id: 'run-undo', kind: 'RUN', label: 'Undo last commit or delete', hint: mod('Z'), keywords: 'undo revert', run: () => { emit('undo'); close(); } },
-      { id: 'run-hide', kind: 'RUN', label: shell.hidden ? 'Show amounts' : 'Mask amounts', hint: 'H', keywords: 'privacy hide values eye', run: () => { shell.toggleHidden(); close(); } },
-      { id: 'theme-light', kind: 'RUN', label: 'Theme: light', keywords: 'theme appearance', run: () => { setThemePreference('light'); close(); } },
-      { id: 'theme-system', kind: 'RUN', label: 'Theme: system', keywords: 'theme appearance', run: () => { setThemePreference('system'); close(); } },
-      { id: 'theme-dark', kind: 'RUN', label: 'Theme: dark', keywords: 'theme appearance', run: () => { setThemePreference('dark'); close(); } },
-      { id: 'run-lock', kind: 'RUN', label: 'Lock database', hint: mod('⇧L'), keywords: 'lock logout close', run: async () => { close(); await onLock(); } },
-      { id: 'doc-keys', kind: 'DOC', label: 'Keyboard shortcuts', hint: '?', keywords: 'help keys', run: () => { close(); shell.setHelpOpen(true); } },
+      { id: 'run-export', kind: 'RUN', label: t('palette.exportAs', { fmt: cfg.format.toUpperCase() }), hint: mod('E'), keywords: t('palette.exportAs.kw'), run: () => { nav('/'); emit('export'); close(); } },
+      { id: 'go-accounts', kind: 'GO', label: t('palette.goAccounts'), hint: mod(','), keywords: t('palette.goAccounts.kw'), run: () => { nav('/'); shell.requestLedger('accounts'); close(); } },
+      { id: 'go-categories', kind: 'GO', label: t('palette.goCategories'), keywords: t('palette.goCategories.kw'), run: () => { nav('/'); shell.requestLedger('categories'); close(); } },
+      { id: 'go-ledger', kind: 'GO', label: t('palette.goLedger'), keywords: t('palette.goLedger.kw'), run: () => { nav('/'); shell.requestLedger('ledger'); close(); } },
+      { id: 'run-clear', kind: 'RUN', label: t('palette.clearFilters'), keywords: t('palette.clearFilters.kw'), run: () => { nav('/'); emit('blotter:filter', { clear: true }); close(); } },
+      { id: 'run-undo', kind: 'RUN', label: t('palette.undo'), hint: mod('Z'), keywords: t('palette.undo.kw'), run: () => { emit('undo'); close(); } },
+      { id: 'run-hide', kind: 'RUN', label: shell.hidden ? t('palette.showAmounts') : t('palette.maskAmounts'), hint: 'H', keywords: t('palette.hide.kw'), run: () => { shell.toggleHidden(); close(); } },
+      { id: 'theme-light', kind: 'RUN', label: t('palette.themeLight'), keywords: t('palette.theme.kw'), run: () => { setThemePreference('light'); close(); } },
+      { id: 'theme-system', kind: 'RUN', label: t('palette.themeSystem'), keywords: t('palette.theme.kw'), run: () => { setThemePreference('system'); close(); } },
+      { id: 'theme-dark', kind: 'RUN', label: t('palette.themeDark'), keywords: t('palette.theme.kw'), run: () => { setThemePreference('dark'); close(); } },
+      { id: 'lang-en', kind: 'RUN', label: t('palette.langEn'), keywords: t('palette.lang.kw'), run: () => { setLang('en'); close(); } },
+      { id: 'lang-de', kind: 'RUN', label: t('palette.langDe'), keywords: t('palette.lang.kw'), run: () => { setLang('de'); close(); } },
+      { id: 'run-lock', kind: 'RUN', label: t('palette.lock'), hint: mod('⇧L'), keywords: t('palette.lock.kw'), run: async () => { close(); await onLock(); } },
+      { id: 'doc-keys', kind: 'DOC', label: t('palette.shortcuts'), hint: '?', keywords: t('palette.shortcuts.kw'), run: () => { close(); shell.setHelpOpen(true); } },
     ];
 
     if (!q) {
@@ -176,7 +181,7 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
     const hay = (i: Item) => `${i.label} ${i.keywords ?? ''} ${i.kind}`.toLowerCase();
     const matched = statics.filter((i) => words.every((w) => hay(i).includes(w)));
     return [...out, ...matched].slice(0, 12);
-  }, [open, query, data, nav, close, shell, toast, onLock]);
+  }, [open, query, data, nav, close, shell, toast, onLock, t]);
 
   useEffect(() => setHl(0), [query]);
 
@@ -190,14 +195,14 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
 
   return (
     <div className="t-scrim t-scrim--top" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
-      <div className="t-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div className="t-palette" role="dialog" aria-modal="true" aria-label={t('palette.aria')}>
         <div className="t-pal-input">
           <span className="p" aria-hidden="true">›</span>
           <input
             ref={inputRef}
             value={query}
-            placeholder="type a command, or: out 21,50 lebensmittel aldi"
-            aria-label="Command"
+            placeholder={t('palette.placeholder')}
+            aria-label={t('palette.commandAria')}
             autoComplete="off"
             spellCheck={false}
             onChange={(e) => setQuery(e.target.value)}
@@ -213,7 +218,7 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
             }}
           />
         </div>
-        <div className="t-pal-list" role="listbox" aria-label="Results">
+        <div className="t-pal-list" role="listbox" aria-label={t('palette.results')}>
           {items.map((item, idx) => (
             <button
               key={item.id}
@@ -230,13 +235,13 @@ export default function CommandPalette({ onLock }: { onLock: () => Promise<void>
               {item.hint && <span className="k">{item.hint}</span>}
             </button>
           ))}
-          {items.length === 0 && <div className="t-menu-empty" style={{ padding: '10px 13px' }}>No command matches. Try “out 12,50 lebensmittel”.</div>}
+          {items.length === 0 && <div className="t-menu-empty" style={{ padding: '10px 13px' }}>{t('palette.noMatch')}</div>}
         </div>
         <div className="t-pal-foot">
-          <span>↑↓ MOVE</span>
-          <span>⇥ COMPLETE</span>
-          <span>⇧⏎ EDIT IN QUICK ENTRY</span>
-          <span>ESC CLOSE</span>
+          <span>{t('palette.footMove')}</span>
+          <span>{t('palette.footComplete')}</span>
+          <span>{t('palette.footEdit')}</span>
+          <span>{t('palette.footClose')}</span>
           <span style={{ marginLeft: 'auto' }}><AppVersion /></span>
         </div>
       </div>
@@ -256,8 +261,12 @@ type Parsed = {
   completion?: string;
 };
 
+// Both languages' keywords are always accepted, so a shorthand a user has in
+// their fingers keeps working after a language switch.
 const DIR: Record<string, 'in' | 'out' | 'trf'> = {
-  in: 'in', income: 'in', '+': 'in', out: 'out', expense: 'out', '-': 'out', trf: 'trf', transfer: 'trf',
+  in: 'in', income: 'in', '+': 'in', ein: 'in', einnahme: 'in',
+  out: 'out', expense: 'out', '-': 'out', aus: 'out', ausgabe: 'out',
+  trf: 'trf', transfer: 'trf', umb: 'trf', umbuchung: 'trf',
 };
 
 /** `[in|out|trf] <amount> [category…] [@account | account…] [notes…]` */

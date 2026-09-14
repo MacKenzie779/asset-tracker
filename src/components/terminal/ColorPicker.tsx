@@ -1,13 +1,15 @@
 import clsx from 'clsx';
+import { useI18n } from '../../hooks/useI18n';
 
 /** The eight entity colours from the handoff. Accounts keep whatever colour they already have. */
 export const ENTITY_COLORS = ['#f0a13c', '#4c8dff', '#35d68f', '#f2e85c', '#e9edf5', '#ff6a4d', '#c8a98a', '#e88ae0'];
 
-export default function ColorPicker({ value, onChange, label = 'Colour' }: { value: string; onChange: (c: string) => void; label?: string }) {
+export default function ColorPicker({ value, onChange, label }: { value: string; onChange: (c: string) => void; label?: string }) {
+  const { t } = useI18n();
   const known = ENTITY_COLORS.includes(value.toLowerCase());
   const colors = known ? ENTITY_COLORS : [value, ...ENTITY_COLORS.slice(0, 7)];
   return (
-    <div className="t-colors" role="radiogroup" aria-label={label}>
+    <div className="t-colors" role="radiogroup" aria-label={label ?? t('color.aria')}>
       {colors.map((c) => (
         <button
           key={c}

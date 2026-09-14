@@ -9,6 +9,7 @@ import { categoryUsage } from '../../lib/analytics';
 import { afterMutation, useData } from '../../lib/data';
 import { errorMessage } from '../../lib/errors';
 import { useShell } from '../../lib/shell';
+import { useI18n } from '../../hooks/useI18n';
 import type { Category } from '../../types';
 
 const DIM_BELOW = 5;
@@ -17,6 +18,7 @@ export default function CategoriesTab({ filter }: { filter: string }) {
   const data = useData();
   const shell = useShell();
   const toast = useToast();
+  const { t, tn } = useI18n();
   const { hidden } = shell;
 
   const [newName, setNewName] = useState('');
@@ -61,12 +63,12 @@ export default function CategoriesTab({ filter }: { filter: string }) {
     setBusy(true);
     try {
       await addCategory(name);
-      toast.success('Category added', { description: name });
+      toast.success(t('cat.added'), { description: name });
       setNewName('');
       afterMutation();
       addRef.current?.focus();
     } catch (e) {
-      toast.error('Could not add category', { description: errorMessage(e) });
+      toast.error(t('cat.addFailed'), { description: errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -80,11 +82,11 @@ export default function CategoriesTab({ filter }: { filter: string }) {
     setBusy(true);
     try {
       await renameCategory(editingId, name);
-      toast.success('Category renamed', { description: `${cur.name} → ${name}` });
+      toast.success(t('cat.renamed'), { description: `${cur.name} → ${name}` });
       setEditingId(null);
       afterMutation();
     } catch (e) {
-      toast.error('Could not rename category', { description: errorMessage(e) });
+      toast.error(t('cat.renameFailed'), { description: errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -96,11 +98,11 @@ export default function CategoriesTab({ filter }: { filter: string }) {
     setBusy(true);
     try {
       await deleteCategory(pendingDelete);
-      toast.success('Category deleted', { description: cur?.name });
+      toast.success(t('cat.deleted'), { description: cur?.name });
       setPendingDelete(null);
       afterMutation();
     } catch (e) {
-      toast.error('Could not delete category', { description: /in use/i.test(errorMessage(e)) ? 'It is used by one or more transactions.' : errorMessage(e) });
+      toast.error(t('cat.deleteFailed'), { description: /in use/i.test(errorMessage(e)) ? t('cat.inUse') : errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -115,31 +117,31 @@ export default function CategoriesTab({ filter }: { filter: string }) {
   return (
     <>
       <div className="t-addblock t-frow">
-        <input ref={addRef} className="t-in" placeholder="new category name" aria-label="New category name" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={addKeys} />
-        <button type="button" className="t-btn t-btn--primary t-btn--sm" onClick={() => void submitAdd()} disabled={busy || !newName.trim()}>ADD ⏎</button>
+        <input ref={addRef} className="t-in" placeholder={t('cat.newPlaceholder')} aria-label={t('cat.newAria')} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={addKeys} />
+        <button type="button" className="t-btn t-btn--primary t-btn--sm" onClick={() => void submitAdd()} disabled={busy || !newName.trim()}>{t('action.addEnter')}</button>
       </div>
 
       <div className="t-sec t-sec--mgmt">
-        <span className="t-label">ALL CATEGORIES · {rows.length}</span>
+        <span className="t-label">{t('cat.allCount', { n: rows.length })}</span>
         <div className="t-sec-rule" />
-        <span className="t-sec-meta">NET, ALL TIME</span>
+        <span className="t-sec-meta">{t('cat.netAllTime')}</span>
       </div>
       <div className="t-cat-head" role="row">
-        <span>NAME</span>
-        <span className="t-right">USED</span>
-        <span className="t-right">NET</span>
+        <span>{t('cat.colName')}</span>
+        <span className="t-right">{t('cat.colUsed')}</span>
+        <span className="t-right">{t('cat.colNet')}</span>
         <span /><span />
       </div>
       <div className="t-pad">
-        {rows.length === 0 && <div className="t-none">{q ? 'No category matches.' : 'No categories yet. They are also created from the quick entry.'}</div>}
+        {rows.length === 0 && <div className="t-none">{q ? t('cat.noMatch') : t('cat.empty')}</div>}
         {rows.map((c) => {
           const u = usage.get(c.name.toLowerCase()) ?? { used: 0, net: 0 };
           if (editingId === c.id) {
             return (
               <div key={c.id} className="t-cat-edit">
-                <input ref={editRef} className="t-in" value={editName} aria-label="Category name" onChange={(e) => setEditName(e.target.value)} onKeyDown={editKeys} />
-                <button type="button" className="t-btn t-btn--primary t-btn--sm" onClick={() => void submitEdit()} disabled={busy || !editName.trim()}>SAVE ⏎</button>
-                <button type="button" className="t-btn t-btn--secondary t-btn--sm" onClick={() => setEditingId(null)} disabled={busy}>ESC</button>
+                <input ref={editRef} className="t-in" value={editName} aria-label={t('cat.nameAria')} onChange={(e) => setEditName(e.target.value)} onKeyDown={editKeys} />
+                <button type="button" className="t-btn t-btn--primary t-btn--sm" onClick={() => void submitEdit()} disabled={busy || !editName.trim()}>{t('action.saveEnter')}</button>
+                <button type="button" className="t-btn t-btn--secondary t-btn--sm" onClick={() => setEditingId(null)} disabled={busy}>{t('action.esc')}</button>
               </div>
             );
           }
@@ -149,20 +151,18 @@ export default function CategoriesTab({ filter }: { filter: string }) {
                 <span className={clsx('n', u.used < DIM_BELOW && 'is-dim')} title={c.name}>{c.name}</span>
                 <span className="c">{u.used}</span>
                 <span className="v"><Money value={u.net} hidden={hidden} tone={Math.abs(u.net) < 0.005 ? 'none' : 'sign'} className={Math.abs(u.net) < 0.005 ? 'ink2' : undefined} /></span>
-                <button type="button" className="t-edit-btn" style={{ width: 'auto' }} aria-label={`Rename ${c.name}`} title="Rename" onClick={() => beginEdit(c)}>✎</button>
-                <button type="button" className="t-del-btn" style={{ width: 'auto' }} aria-label={`Delete ${c.name}`} title="Delete" onClick={() => { setEditingId(null); setPendingDelete(c.id); }}>⌫</button>
+                <button type="button" className="t-edit-btn" style={{ width: 'auto' }} aria-label={t('cat.renameAria', { name: c.name })} title={t('action.renameTitle')} onClick={() => beginEdit(c)}>✎</button>
+                <button type="button" className="t-del-btn" style={{ width: 'auto' }} aria-label={t('acc.deleteAria', { name: c.name })} title={t('action.deleteTitle')} onClick={() => { setEditingId(null); setPendingDelete(c.id); }}>⌫</button>
               </div>
               {pendingDelete === c.id && (
-                <div className="t-confirm" role="alertdialog" aria-label={`Delete ${c.name}?`} style={{ margin: '8px 0 0' }}>
-                  <div className="h">Delete “{c.name}”?</div>
+                <div className="t-confirm" role="alertdialog" aria-label={t('confirm.deleteAria', { name: c.name })} style={{ margin: '8px 0 0' }}>
+                  <div className="h">{t('confirm.deleteHead', { name: c.name })}</div>
                   <div className="b">
-                    {u.used > 0
-                      ? `${u.used} transaction${u.used === 1 ? '' : 's'} use${u.used === 1 ? 's' : ''} it. A used category cannot be deleted — rename it, or re-categorise those transactions first.`
-                      : 'Nothing uses it.'}
+                    {u.used > 0 ? tn('cat.deleteBlocked', u.used) : t('cat.deleteFree')}
                   </div>
                   <div className="a">
-                    <button type="button" className="t-btn t-btn--danger t-btn--sm" onClick={() => void confirmDelete()} disabled={busy || u.used > 0}>DELETE</button>
-                    <button type="button" className="t-btn t-btn--secondary t-btn--sm" onClick={() => setPendingDelete(null)} disabled={busy}>KEEP</button>
+                    <button type="button" className="t-btn t-btn--danger t-btn--sm" onClick={() => void confirmDelete()} disabled={busy || u.used > 0}>{t('action.delete')}</button>
+                    <button type="button" className="t-btn t-btn--secondary t-btn--sm" onClick={() => setPendingDelete(null)} disabled={busy}>{t('action.keep')}</button>
                   </div>
                 </div>
               )}
@@ -172,7 +172,7 @@ export default function CategoriesTab({ filter }: { filter: string }) {
       </div>
 
       <div className="t-spacer" style={{ minHeight: 12 }} />
-      <div className="t-footnote">Renaming keeps every transaction attached. A used category cannot be deleted. Dimmed names are used fewer than {DIM_BELOW} times.</div>
+      <div className="t-footnote">{t('cat.footnote', { n: DIM_BELOW })}</div>
     </>
   );
 }

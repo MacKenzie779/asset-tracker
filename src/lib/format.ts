@@ -1,3 +1,5 @@
+import { monthShort } from './i18n';
+
 // Format 'YYYY-MM-DD' or Date -> 'dd.mm.yyyy'
 export function formatDate(d: string | Date): string {
   if (typeof d === 'string') {
@@ -34,6 +36,11 @@ export function todayDE(): string {
   return fmt(new Date());
 }
 
+// Today's date as 'YYYY-MM-DD'
+export function todayISO(): string {
+  return toISO(new Date());
+}
+
 // Internal helpers
 function fmt(dt: Date): string {
   const dd = String(dt.getDate()).padStart(2, '0');
@@ -66,11 +73,10 @@ export function toISODate(dt: Date): string {
   return toISO(dt);
 }
 
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-
-// 'YYYY-MM' -> 'SEP 26' (chart axes)
+// 'YYYY-MM' -> 'SEP 26' / 'SEP 26' (chart axes); the month follows the language.
 export function formatMonthKey(key: string): string {
   const m = key.match(/^(\d{4})-(\d{2})/);
   if (!m) return key;
-  return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1].slice(2)}`;
+  const month = Number(m[2]);
+  return `${month >= 1 && month <= 12 ? monthShort(month) : m[2]} ${m[1].slice(2)}`;
 }

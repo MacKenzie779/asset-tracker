@@ -9,10 +9,12 @@ import '@fontsource/azeret-mono/500.css';
 import '@fontsource/azeret-mono/600.css';
 import './styles/terminal.css';
 import App from './App';
+import { initI18n } from './lib/i18n';
 import { initTheme } from './lib/theme';
 
-// Apply the persisted / OS theme before the first paint.
+// Apply the persisted / OS theme and language before the first paint.
 initTheme();
+initI18n();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

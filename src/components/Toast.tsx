@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import clsx from 'clsx';
+import { t as translate } from '../lib/i18n';
 
 export type ToastKind = 'success' | 'error' | 'info';
 
@@ -169,7 +170,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const KIND_LABEL: Record<ToastKind, string> = { success: 'OK', error: 'ERR', info: 'INFO' };
+const KIND_LABEL: Record<ToastKind, 'toast.ok' | 'toast.err' | 'toast.info'> = { success: 'toast.ok', error: 'toast.err', info: 'toast.info' };
 
 function ToastCard({
   item,
@@ -191,7 +192,7 @@ function ToastCard({
       onBlur={onResume}
       className="t-toast"
     >
-      <span className={clsx('k mono', item.kind)}>{KIND_LABEL[item.kind]}</span>
+      <span className={clsx('k mono', item.kind)}>{translate(KIND_LABEL[item.kind])}</span>
       <div style={{ minWidth: 0, flex: 1 }}>
         <p className="t">{item.title}</p>
         {item.description ? <div className="d">{item.description}</div> : null}
@@ -216,7 +217,7 @@ function ToastCard({
           </div>
         ) : null}
       </div>
-      <button type="button" className="x mono" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>✕</button>
+      <button type="button" className="x mono" aria-label={translate('toast.dismiss')} title={translate('toast.dismiss')} onClick={onDismiss}>✕</button>
     </div>
   );
 }

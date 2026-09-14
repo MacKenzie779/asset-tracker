@@ -1,5 +1,7 @@
 import clsx from 'clsx';
+import { useI18n } from '../../hooks/useI18n';
 import { useTheme } from '../../hooks/useTheme';
+import type { Lang } from '../../lib/i18n';
 import type { ThemePreference } from '../../lib/theme';
 
 const ICON = { viewBox: '0 0 16 16', width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.35, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -45,28 +47,56 @@ function EyeOff() {
   );
 }
 
-const THEMES: { value: ThemePreference; label: string; Icon: () => JSX.Element }[] = [
-  { value: 'light', label: 'Light theme', Icon: Sun },
-  { value: 'system', label: 'System theme', Icon: Display },
-  { value: 'dark', label: 'Dark theme', Icon: Moon },
+const THEMES: { value: ThemePreference; labelKey: 'theme.light' | 'theme.system' | 'theme.dark'; Icon: () => JSX.Element }[] = [
+  { value: 'light', labelKey: 'theme.light', Icon: Sun },
+  { value: 'system', labelKey: 'theme.system', Icon: Display },
+  { value: 'dark', labelKey: 'theme.dark', Icon: Moon },
 ];
+
+const LANGS: { value: Lang; short: string; labelKey: 'lang.en' | 'lang.de' }[] = [
+  { value: 'en', short: 'EN', labelKey: 'lang.en' },
+  { value: 'de', short: 'DE', labelKey: 'lang.de' },
+];
+
+export function LanguageControl() {
+  const { lang, setLang, t } = useI18n();
+  return (
+    <div className="t-seg-group" role="radiogroup" aria-label={t('lang.aria')}>
+      {LANGS.map(({ value, short, labelKey }) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={lang === value}
+          title={t(labelKey)}
+          className={clsx('t-seg t-seg--text', lang === value && 'is-active')}
+          onClick={() => setLang(value)}
+        >
+          <span aria-hidden="true">{short}</span>
+          <span className="t-sr">{t(labelKey)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function ThemeControl() {
   const { preference, setPreference } = useTheme();
+  const { t } = useI18n();
   return (
-    <div className="t-seg-group" role="radiogroup" aria-label="Theme">
-      {THEMES.map(({ value, label, Icon }) => (
+    <div className="t-seg-group" role="radiogroup" aria-label={t('theme.aria')}>
+      {THEMES.map(({ value, labelKey, Icon }) => (
         <button
           key={value}
           type="button"
           role="radio"
           aria-checked={preference === value}
-          title={label}
+          title={t(labelKey)}
           className={clsx('t-seg', preference === value && 'is-active')}
           onClick={() => setPreference(value)}
         >
           <Icon />
-          <span className="t-sr">{label}</span>
+          <span className="t-sr">{t(labelKey)}</span>
         </button>
       ))}
     </div>
@@ -74,15 +104,16 @@ export function ThemeControl() {
 }
 
 export function PrivacyControl({ hidden, onChange }: { hidden: boolean; onChange: (hidden: boolean) => void }) {
+  const { t } = useI18n();
   return (
-    <div className="t-seg-group" role="radiogroup" aria-label="Amount visibility">
-      <button type="button" role="radio" aria-checked={!hidden} title="Show amounts (H)" className={clsx('t-seg', !hidden && 'is-active')} onClick={() => onChange(false)}>
+    <div className="t-seg-group" role="radiogroup" aria-label={t('privacy.aria')}>
+      <button type="button" role="radio" aria-checked={!hidden} title={t('privacy.show')} className={clsx('t-seg', !hidden && 'is-active')} onClick={() => onChange(false)}>
         <Eye />
-        <span className="t-sr">Values visible</span>
+        <span className="t-sr">{t('privacy.visible')}</span>
       </button>
-      <button type="button" role="radio" aria-checked={hidden} title="Mask amounts (H)" className={clsx('t-seg', hidden && 'is-active')} onClick={() => onChange(true)}>
+      <button type="button" role="radio" aria-checked={hidden} title={t('privacy.mask')} className={clsx('t-seg', hidden && 'is-active')} onClick={() => onChange(true)}>
         <EyeOff />
-        <span className="t-sr">Values masked</span>
+        <span className="t-sr">{t('privacy.masked')}</span>
       </button>
     </div>
   );

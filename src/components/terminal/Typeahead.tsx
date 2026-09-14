@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type R
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useAnchoredMenu } from '../../hooks/useAnchoredMenu';
+import { useI18n } from '../../hooks/useI18n';
 
 export type TAItem = { id: string; label: string; color?: string | null; hint?: string };
 
@@ -42,9 +43,10 @@ export default function Typeahead({
   disabled,
   invalid,
   onKeyDown,
-  emptyText = 'No matches',
+  emptyText,
   createHint = false,
 }: Props) {
+  const { t } = useI18n();
   const ownRef = useRef<HTMLInputElement | null>(null);
   const ref = inputRef ?? ownRef;
   const [open, setOpen] = useState(false);
@@ -121,7 +123,7 @@ export default function Typeahead({
     }, 120);
   };
 
-  const label = ariaLabel ?? placeholder?.replace(/\*$/, '') ?? 'Value';
+  const label = ariaLabel ?? placeholder?.replace(/\*$/, '') ?? t('ta.value');
   const q = value.trim();
 
   return (
@@ -170,10 +172,10 @@ export default function Typeahead({
               </li>
             ))}
             {list.length === 0 && (
-              <li className="t-menu-empty">{createHint && q ? `⏎ creates “${q}”` : emptyText}</li>
+              <li className="t-menu-empty">{createHint && q ? t('ta.createsEmpty', { q }) : emptyText ?? t('ta.noMatches')}</li>
             )}
             {createHint && q && !exact && list.length > 0 && (
-              <li className="t-menu-empty">⏎ with the typed name creates “{q}”</li>
+              <li className="t-menu-empty">{t('ta.createsTyped', { q })}</li>
             )}
           </ul>
         </div>,

@@ -1,13 +1,16 @@
-// Blotter column: header (type segments, search, dropdowns), quick entry,
+// Blotter column: header (search, dropdowns), quick entry,
 // column header, the scrolling rows, the summary line, and the pagination bar.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import BlotterRow from './BlotterRow';
+import DateField from './DateField';
 import Dropdown from './Dropdown';
 import Money from './Money';
 import QuickEntry from './QuickEntry';
 import { useData } from '../../lib/data';
 import { useBus } from '../../hooks/useBus';
+import { useI18n } from '../../hooks/useI18n';
+import type { TKey } from '../../lib/i18n';
 import type { CommitPlan } from '../../pages/Terminal';
 import type { Transaction, TransactionSearchResult, TxSortBy, TxTypeFilter, UpdateTransaction } from '../../types';
 
@@ -48,21 +51,18 @@ type Props = {
   hidden: boolean;
 };
 
-const TYPES: { value: TxTypeFilter; label: string }[] = [
-  { value: 'all', label: 'ALL' }, { value: 'income', label: 'INCOME' }, { value: 'expense', label: 'EXPENSE' }, { value: 'transfer', label: 'TRANSFER' },
-];
-const SPANS: { value: TimeSpan; label: string }[] = [
-  { value: 'all', label: 'All time' }, { value: 'this_month', label: 'This month' }, { value: 'last_month', label: 'Last month' }, { value: 'this_year', label: 'This year' }, { value: 'custom', label: 'Custom…' },
-];
-const COLS: { key: TxSortBy; label: string; cls: string }[] = [
-  { key: 'date', label: 'DATE', cls: 'c-date' }, { key: 'category', label: 'CATEGORY', cls: 'c-cat' }, { key: 'description', label: 'NOTES', cls: 'c-notes' },
-  { key: 'amount', label: 'VALUE', cls: 'c-val' }, { key: 'account', label: 'ACCOUNT', cls: 'c-acc' },
+const TYPES: TxTypeFilter[] = ['all', 'income', 'expense', 'transfer'];
+const SPANS: TimeSpan[] = ['all', 'this_month', 'last_month', 'this_year', 'custom'];
+const COLS: { key: TxSortBy; cls: string }[] = [
+  { key: 'date', cls: 'c-date' }, { key: 'category', cls: 'c-cat' }, { key: 'description', cls: 'c-notes' },
+  { key: 'amount', cls: 'c-val' }, { key: 'account', cls: 'c-acc' },
 ];
 const ROW_H = 27;
 
 export default function Blotter(p: Props) {
   const { filters, onFilters, result, hidden } = p;
   const data = useData();
+  const { t, tn } = useI18n();
   const searchRef = useRef<HTMLInputElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   useBus('focus:search', () => { searchRef.current?.focus(); searchRef.current?.select(); });
@@ -97,8 +97,8 @@ export default function Blotter(p: Props) {
   useEffect(() => setPendingCustom({ from: filters.customFrom, to: filters.customTo }), [filters.customFrom, filters.customTo]);
 
   const accountOptions = useMemo(
-    () => [{ value: 'all', label: 'All accounts', color: null }, ...data.accounts.map((a) => ({ value: String(a.id), label: a.name, color: a.color ?? '#6b7280' }))],
-    [data.accounts]
+    () => [{ value: 'all', label: t('blotter.allAccounts'), color: null }, ...data.accounts.map((a) => ({ value: String(a.id), label: a.name, color: a.color ?? '#6b7280' }))],
+    [data.accounts, t]
   );
 
   const isAllAccounts = filters.accountId == null;
@@ -126,64 +126,56 @@ export default function Blotter(p: Props) {
     onFilters({ sortBy: by, sortDir: filters.sortBy === by ? (filters.sortDir === 'asc' ? 'desc' : 'asc') : 'asc' });
 
   return (
-    <section className="t-blotter" aria-label="Blotter">
+    <section className="t-blotter" aria-label={t('blotter.aria')}>
       <div className="t-bhead">
-        <span className="t-title">BLOTTER</span>
-        <div className="t-joined" role="radiogroup" aria-label="Type" style={{ marginLeft: 2 }}>
-          {TYPES.map((t) => (
-            <button key={t.value} type="button" role="radio" aria-checked={filters.type === t.value} className={clsx('t-jseg', filters.type === t.value && 'is-active')} onClick={() => onFilters({ type: t.value })}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <span className="t-title">{t('blotter.title')}</span>
         <input
           ref={searchRef}
           type="text"
           role="searchbox"
           className="t-search"
-          placeholder="⌕ search category, notes"
-          aria-label="Search category and notes"
+          placeholder={t('blotter.searchPlaceholder')}
+          aria-label={t('blotter.searchAria')}
           value={filters.rawQuery}
           onChange={(e) => onFilters({ rawQuery: e.target.value })}
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); if (filters.rawQuery) onFilters({ rawQuery: '' }); else searchRef.current?.blur(); } }}
         />
-        <div className="t-spacer" />
         {filters.timeSpan === 'custom' && (
           <>
-            <input type="date" className="t-in t-date-mini" aria-label="From date" value={pendingCustom.from} max={pendingCustom.to || undefined} onChange={(e) => setPendingCustom((c) => ({ ...c, from: e.target.value }))} />
-            <input type="date" className="t-in t-date-mini" aria-label="To date" value={pendingCustom.to} min={pendingCustom.from || undefined} onChange={(e) => setPendingCustom((c) => ({ ...c, to: e.target.value }))} />
+            <DateField className="t-datefield--mini" ariaLabel={t('blotter.fromDate')} value={pendingCustom.from} max={pendingCustom.to || undefined} onChange={(v) => setPendingCustom((c) => ({ ...c, from: v }))} />
+            <DateField className="t-datefield--mini" ariaLabel={t('blotter.toDate')} value={pendingCustom.to} min={pendingCustom.from || undefined} onChange={(v) => setPendingCustom((c) => ({ ...c, to: v }))} />
             <button type="button" className="t-btn t-btn--primary t-btn--sm" style={{ padding: '3px 7px' }} onClick={() => onFilters({ customFrom: pendingCustom.from, customTo: pendingCustom.to })}>
-              APPLY
+              {t('blotter.apply')}
             </button>
           </>
         )}
         <Dropdown
-          options={SPANS}
+          options={SPANS.map((v) => ({ value: v, label: t(`span.${v}` as TKey) }))}
           value={filters.timeSpan}
           onChange={(v) => onFilters({ timeSpan: v as TimeSpan, ...(v !== 'custom' ? { customFrom: '', customTo: '' } : {}) })}
-          ariaLabel="Time span"
+          ariaLabel={t('blotter.timeSpan')}
           isSet={filters.timeSpan !== 'all'}
         />
         <Dropdown
           options={accountOptions}
           value={filters.accountId == null ? 'all' : String(filters.accountId)}
           onChange={(v) => onFilters({ accountId: v === 'all' ? null : Number(v) })}
-          ariaLabel="Account"
+          ariaLabel={t('blotter.account')}
           isSet={filters.accountId != null}
         />
         <Dropdown
-          options={TYPES.map((t) => ({ value: t.value, label: t.value === 'all' ? 'All types' : t.label.charAt(0) + t.label.slice(1).toLowerCase() }))}
+          options={TYPES.map((v) => ({ value: v, label: t(`type.${v}` as TKey) }))}
           value={filters.type}
           onChange={(v) => onFilters({ type: v as TxTypeFilter })}
-          ariaLabel="Type"
+          ariaLabel={t('blotter.type')}
           isSet={filters.type !== 'all'}
         />
       </div>
 
       {p.error && (
         <div className="t-errbar" role="alert">
-          <span className="t-truncate">Could not load transactions: {p.error}</span>
-          <button type="button" onClick={p.onRetry}>RETRY</button>
+          <span className="t-truncate">{t('blotter.loadError', { msg: p.error })}</span>
+          <button type="button" onClick={p.onRetry}>{t('action.retry')}</button>
         </div>
       )}
 
@@ -192,10 +184,11 @@ export default function Blotter(p: Props) {
       <div className="t-grid t-colhead" role="row">
         {COLS.map((c) => {
           const active = filters.sortBy === c.key;
+          const label = t(`col.${c.key}` as TKey);
           return (
             <span key={c.key} className={c.cls} role="columnheader" aria-sort={active ? (filters.sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-              <button type="button" className={clsx(active && 'is-active')} onClick={() => sort(c.key)} title={`Sort by ${c.label.toLowerCase()}`}>
-                {c.label}{active ? (filters.sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+              <button type="button" className={clsx(active && 'is-active')} onClick={() => sort(c.key)} title={t('blotter.sortBy', { col: label.toLowerCase() })}>
+                {label}{active ? (filters.sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
               </button>
             </span>
           );
@@ -203,7 +196,7 @@ export default function Blotter(p: Props) {
         <span className="c-act" />
       </div>
 
-      <div ref={rowsRef} className="t-rows" role="grid" aria-busy={p.loading || undefined} aria-label="Transactions">
+      <div ref={rowsRef} className="t-rows" role="grid" aria-busy={p.loading || undefined} aria-label={t('blotter.rowsAria')}>
         {result.items.map((row) => (
           <BlotterRow
             key={row.id}
@@ -227,29 +220,29 @@ export default function Blotter(p: Props) {
         ))}
         {showEmpty && (
           <div className="t-empty">
-            <span>{hasFilters ? 'No transactions match this filter.' : 'No transactions yet. Commit the first one above.'}</span>
-            {hasFilters && <button type="button" onClick={p.onClear}>CLEAR FILTERS</button>}
+            <span>{hasFilters ? t('blotter.emptyFiltered') : t('blotter.empty')}</span>
+            {hasFilters && <button type="button" onClick={p.onClear}>{t('blotter.clearFilters')}</button>}
           </div>
         )}
       </div>
 
-      <div className="t-grid t-summary" aria-label="Summary of the filtered result">
-        <span className="c-date">SUMMARY</span>
-        <span className="c-cat">{result.total} row{result.total === 1 ? '' : 's'}</span>
+      <div className="t-grid t-summary" aria-label={t('blotter.summaryAria')}>
+        <span className="c-date">{t('blotter.summary')}</span>
+        <span className="c-cat">{tn('blotter.rowCount', result.total)}</span>
         <span className="c-notes">
-          <span>IN <Money value={income} hidden={hidden} sign="none" tone="pos" /></span>
-          <span>OUT <Money value={expense} hidden={hidden} sign="neg" tone="neg" /></span>
-          {!isAllAccounts && Math.abs(transfer) > 0.005 && <span>TRF <Money value={transfer} hidden={hidden} sign="always" tone="sign" /></span>}
+          <span>{t('blotter.in')} <Money value={income} hidden={hidden} sign="none" tone="pos" /></span>
+          <span>{t('blotter.out')} <Money value={expense} hidden={hidden} sign="neg" tone="neg" /></span>
+          {!isAllAccounts && Math.abs(transfer) > 0.005 && <span>{t('blotter.trf')} <Money value={transfer} hidden={hidden} sign="always" tone="sign" /></span>}
         </span>
         <span className="c-val"><Money value={saldo} hidden={hidden} sign="neg" tone="none" /></span>
-        <span className="c-acc">{isAllAccounts ? 'saldo of filter' : 'balance change'}</span>
+        <span className="c-acc">{isAllAccounts ? t('blotter.saldoOfFilter') : t('blotter.balanceChange')}</span>
         <span className="c-act" />
       </div>
 
-      <nav className="t-pager" aria-label="Pagination">
-        <span aria-live="polite">PAGE {p.page}/{p.totalPages}{p.loading && result.items.length > 0 ? ' · LOADING' : ''}</span>
+      <nav className="t-pager" aria-label={t('pager.aria')}>
+        <span aria-live="polite">{t('pager.page', { page: p.page, total: p.totalPages })}{p.loading && result.items.length > 0 ? ` · ${t('pager.loading')}` : ''}</span>
         <div className="t-spacer" />
-        <button type="button" disabled={p.page <= 1} onClick={() => p.onPage(p.page - 1)}>PREV</button>
+        <button type="button" disabled={p.page <= 1} onClick={() => p.onPage(p.page - 1)}>{t('pager.prev')}</button>
         {pageItems.map((it, idx) =>
           it === '…' ? (
             <span key={`d-${idx}`}>…</span>
@@ -259,7 +252,7 @@ export default function Blotter(p: Props) {
             </button>
           )
         )}
-        <button type="button" disabled={p.page >= p.totalPages} onClick={() => p.onPage(p.page + 1)}>NEXT</button>
+        <button type="button" disabled={p.page >= p.totalPages} onClick={() => p.onPage(p.page + 1)}>{t('pager.next')}</button>
       </nav>
     </section>
   );

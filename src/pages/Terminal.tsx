@@ -12,6 +12,7 @@ import { formatAbs } from '../lib/number';
 import { useShell } from '../lib/shell';
 import type { Shortcut } from '../lib/shortcuts';
 import { useBus } from '../hooks/useBus';
+import { useI18n } from '../hooks/useI18n';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { emit } from '../lib/bus';
 import type {
@@ -58,6 +59,7 @@ export default function Terminal() {
   const data = useData();
   const toast = useToast();
   const shell = useShell();
+  const { t } = useI18n();
 
   const [filters, setFiltersState] = useState<BlotterFilters>(DEFAULT_FILTERS);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
@@ -163,22 +165,22 @@ export default function Terminal() {
   const update = useCallback(async (patch: UpdateTransaction) => {
     try {
       await updateTransaction(patch);
-      toast.success('Transaction updated');
+      toast.success(t('tx.updated'));
       afterMutation();
     } catch (e) {
-      toast.error('Could not update transaction', { description: errorMessage(e) });
+      toast.error(t('tx.updateFailed'), { description: errorMessage(e) });
       throw e;
     }
-  }, [toast]);
+  }, [toast, t]);
 
   const undo = useCallback(async () => {
     const u = undoRef.current;
-    if (!u) { toast.info('Nothing to undo'); return; }
+    if (!u) { toast.info(t('undo.nothing')); return; }
     undoRef.current = null;
     try {
       if (u.kind === 'commit') {
         for (const id of u.ids) await deleteTransaction(id);
-        toast.success('Commit undone');
+        toast.success(t('undo.commitUndone'));
       } else if (u.rows.length >= 2) {
         const from = u.rows.find((r) => r.amount < 0) ?? u.rows[0];
         const to = u.rows.find((r) => r.id !== from.id) ?? u.rows[1];
@@ -186,17 +188,17 @@ export default function Terminal() {
           from_account_id: from.account_id, to_account_id: to.account_id, date: from.date,
           amount: Math.abs(from.amount), description: from.description ?? null, category: from.category ?? null,
         });
-        toast.success('Transfer restored');
+        toast.success(t('undo.transferRestored'));
       } else {
         const r = u.rows[0];
         await addTransaction({ account_id: r.account_id, date: r.date, amount: r.amount, description: r.description ?? null, category: r.category ?? null });
-        toast.success('Transaction restored');
+        toast.success(t('undo.txRestored'));
       }
       afterMutation();
     } catch (e) {
-      toast.error('Undo failed', { description: errorMessage(e) });
+      toast.error(t('undo.failed'), { description: errorMessage(e) });
     }
-  }, [toast]);
+  }, [toast, t]);
   useBus('undo', () => void undo());
 
   const remove = useCallback(async (id: number) => {
@@ -206,7 +208,7 @@ export default function Terminal() {
     try {
       await deleteTransaction(id);
     } catch (e) {
-      toast.error('Could not delete transaction', { description: errorMessage(e) });
+      toast.error(t('tx.deleteFailed'), { description: errorMessage(e) });
       return;
     }
     undoRef.current = { kind: 'delete', rows: rows.length >= 2 ? rows : [row] };
@@ -214,12 +216,12 @@ export default function Terminal() {
     const next = result.items[idx + 1] ?? result.items[idx - 1];
     setSelectedId(next?.id ?? null);
     setEditingId(null);
-    toast.success(row.transfer_id != null ? 'Transfer deleted (both sides)' : 'Transaction deleted', {
+    toast.success(row.transfer_id != null ? t('tx.transferDeleted') : t('tx.deleted'), {
       description: `${row.category ?? '—'} · ${formatAbs(row.amount)} €`,
-      actions: [{ label: 'UNDO', onClick: () => undo() }],
+      actions: [{ label: t('action.undo'), onClick: () => undo() }],
     });
     afterMutation();
-  }, [result.items, data.txAll, toast, undo]);
+  }, [result.items, data.txAll, toast, undo, t]);
 
   const duplicate = useCallback((row: Transaction) => {
     emit('quick-entry:prefill', {
@@ -243,13 +245,13 @@ export default function Terminal() {
       setSelectedId(items[next].id);
     };
     return [
-      { id: 'down', keys: 'J', description: 'Next row', match: (e) => e.key === 'j' || e.key === 'ArrowDown', run: () => move(1) },
-      { id: 'up', keys: 'K', description: 'Previous row', match: (e) => e.key === 'k' || e.key === 'ArrowUp', run: () => move(-1) },
-      { id: 'edit', keys: 'Enter', description: 'Edit row', when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Enter', run: () => setEditingId(selectedId) },
-      { id: 'delete', keys: 'Backspace', description: 'Delete row', when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Backspace' || e.key === 'Delete', run: () => { if (selectedId != null) void remove(selectedId); } },
-      { id: 'esc', keys: 'Esc', description: 'Clear selection', when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Escape', run: () => setSelectedId(null) },
+      { id: 'down', keys: 'J', description: t('sc.rowDown'), match: (e) => e.key === 'j' || e.key === 'ArrowDown', run: () => move(1) },
+      { id: 'up', keys: 'K', description: t('sc.rowUp'), match: (e) => e.key === 'k' || e.key === 'ArrowUp', run: () => move(-1) },
+      { id: 'edit', keys: 'Enter', description: t('sc.rowEdit'), when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Enter', run: () => setEditingId(selectedId) },
+      { id: 'delete', keys: 'Backspace', description: t('sc.rowDelete'), when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Backspace' || e.key === 'Delete', run: () => { if (selectedId != null) void remove(selectedId); } },
+      { id: 'esc', keys: 'Esc', description: t('sc.rowEsc'), when: () => selectedId != null && editingId == null, match: (e) => e.key === 'Escape', run: () => setSelectedId(null) },
     ];
-  }, [result.items, selectedId, editingId, remove]);
+  }, [result.items, selectedId, editingId, remove, t]);
   useShortcuts(shortcuts);
 
   const filterAccount = filters.accountId != null ? data.accountById.get(filters.accountId) ?? null : null;

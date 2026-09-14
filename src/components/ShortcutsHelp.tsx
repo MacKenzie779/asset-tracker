@@ -1,4 +1,5 @@
 import Modal from './Modal';
+import { useI18n } from '../hooks/useI18n';
 import { formatKeys, type Shortcut } from '../lib/shortcuts';
 
 export default function ShortcutsHelp({
@@ -10,16 +11,17 @@ export default function ShortcutsHelp({
   onClose: () => void;
   shortcuts: Shortcut[];
 }) {
+  const { t } = useI18n();
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="KEYBOARD"
+      title={t('help.title')}
       size="md"
       initialFocus="panel"
       footer={
         <button type="button" className="t-btn t-btn--primary" onClick={onClose}>
-          CLOSE · ESC
+          {t('help.close')}
         </button>
       }
     >
@@ -35,11 +37,11 @@ export default function ShortcutsHelp({
           </div>
         ))}
         <div className="t-help-row">
-          <span>Save / cancel an inline edit</span>
+          <span>{t('help.inlineEdit')}</span>
           <span className="keys"><kbd className="t-key">Enter</kbd><kbd className="t-key">Esc</kbd></span>
         </div>
         <div className="t-help-row">
-          <span>Accept a completion in quick entry or the palette</span>
+          <span>{t('help.completion')}</span>
           <span className="keys"><kbd className="t-key">Tab</kbd></span>
         </div>
       </div>

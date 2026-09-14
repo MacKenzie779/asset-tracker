@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { t } from '../../lib/i18n';
 import { formatAbs, formatSigned, MASK } from '../../lib/number';
 
 type Props = {
@@ -21,7 +22,7 @@ export default function Money({ value, hidden, sign = 'always', tone = 'sign', d
     return (
       <span className={clsx('num masked', toneClass, className)} title={title}>
         <span aria-hidden="true">{MASK}</span>
-        <span className="t-sr">Amount hidden</span>
+        <span className="t-sr">{t('money.hidden')}</span>
       </span>
     );
   }

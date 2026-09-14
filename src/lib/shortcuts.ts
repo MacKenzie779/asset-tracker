@@ -1,3 +1,5 @@
+import { t } from './i18n';
+
 export type Shortcut = {
   id: string;
   /** Display form, e.g. 'Mod+K', '/', 'N', '?', 'Mod+Shift+L', 'Mod+1…5'. */
@@ -24,7 +26,7 @@ export function isEditableTarget(t: EventTarget | null): boolean {
 
 const IS_MAC = /Macintosh|Mac OS X|iPhone|iPad/i.test(navigator.userAgent);
 
-/** 'Mod+Shift+L' -> ['⌘', 'Shift', 'L'] on macOS, ['Ctrl', 'Shift', 'L'] elsewhere. */
+/** 'Mod+Shift+L' -> ['⌘', 'Shift', 'L'] on macOS, ['Ctrl'/'Strg', 'Shift', 'L'] elsewhere. */
 export function formatKeys(keys: string): string[] {
-  return keys.split('+').map((k) => (k === 'Mod' ? (IS_MAC ? '⌘' : 'Ctrl') : k));
+  return keys.split('+').map((k) => (k === 'Mod' ? (IS_MAC ? '⌘' : t('key.ctrl')) : k));
 }

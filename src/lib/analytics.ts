@@ -5,6 +5,7 @@
 // (income - expenses) / income.
 import type { Account, Transaction } from '../types';
 import { toISODate } from './format';
+import { t as translate } from './i18n';
 
 /** Bookkeeping categories that are not spending or income. Same set the old Stats page used. */
 export const EXCLUDED_CATEGORIES = new Set(['transfer', 'transfers', 'init', 'korrektur']);
@@ -107,7 +108,7 @@ export function categorySpend(txAll: Transaction[], sinceISO: string | null): Ca
   for (const t of txAll) {
     if (!isFlow(t) || t.amount >= 0) continue;
     if (sinceISO && t.date < sinceISO) continue;
-    const name = t.category || 'Uncategorized';
+    const name = t.category || translate('stats.uncategorized');
     const cur = sums.get(name) ?? { value: 0, count: 0 };
     cur.value += -t.amount;
     cur.count += 1;
@@ -133,7 +134,7 @@ export function allocation(accounts: Account[]): AllocationRow[] {
     .filter((a) => a.balance > 0.005)
     .map((a) => ({
       id: a.id,
-      name: a.type === 'person' ? `${a.name} (open)` : a.name,
+      name: a.type === 'person' ? translate('stats.personOpen', { name: a.name }) : a.name,
       color: a.color || FALLBACK,
       value: a.balance,
       share: 0,

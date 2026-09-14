@@ -16,10 +16,13 @@ import { formatDate, formatMonthKey } from '../lib/format';
 import { formatAbs, formatPercent, MASK } from '../lib/number';
 import { totalValue } from '../lib/people';
 import { useShell } from '../lib/shell';
+import { useI18n } from '../hooks/useI18n';
+import { t as translate } from '../lib/i18n';
 
 export default function Stats() {
   const data = useData();
   const { hidden } = useShell();
+  const { t, tn } = useI18n();
   const nav = useNavigate();
 
   const months12 = useMemo(() => lastMonthKeys(12), []);
@@ -51,11 +54,11 @@ export default function Stats() {
   };
 
   return (
-    <div className="t-stats" aria-label="Stats">
+    <div className="t-stats" aria-label={t('stats.aria')}>
       {/* Band 1: KPI rail */}
       <div className="t-kpis">
         <div className="t-kpi">
-          <div className="l">TOTAL VALUE</div>
+          <div className="l">{t('stats.totalValue')}</div>
           <div className="v">{data.loaded ? <Money value={total} hidden={hidden} sign="neg" tone="none" /> : '——'}<span className="u"> €</span></div>
           <div className="t-spark-row">
             <Sparkline values={worth} stroke={change != null && change < 0 ? 'var(--neg)' : 'var(--pos)'} />
@@ -63,12 +66,12 @@ export default function Stats() {
           </div>
         </div>
         <div className="t-kpi">
-          <div className="l">NET THIS MONTH</div>
+          <div className="l">{t('pos.netThisMonth')}</div>
           <div className="v"><Money value={net} hidden={hidden} /></div>
-          <div className="s">transfers excluded</div>
+          <div className="s">{t('stats.transfersExcluded')}</div>
         </div>
         <div className="t-kpi">
-          <div className="l">SAVINGS RATE · 12M</div>
+          <div className="l">{t('stats.savingsRate12m')}</div>
           <div className={clsx('v', rate == null ? 'ink2' : rate < 0 ? 'neg' : 'pos')}>{rate == null ? '—' : hidden ? '•••' : formatPercent(rate)}</div>
           <div className="t-divbars" aria-hidden="true">
             {flows.map((f) => {
@@ -84,12 +87,12 @@ export default function Stats() {
           </div>
         </div>
         <div className="t-kpi">
-          <div className="l">IN / OUT · ALL TIME</div>
+          <div className="l">{t('stats.inOutAllTime')}</div>
           <div className="pair">
             <div><Money value={all.income} hidden={hidden} sign="none" tone="pos" /></div>
             <div><Money value={all.expense} hidden={hidden} sign="neg" tone="neg" /></div>
           </div>
-          <div className="s">{all.count} transaction{all.count === 1 ? '' : 's'}</div>
+          <div className="s">{tn('stats.txCount', all.count)}</div>
         </div>
       </div>
 
@@ -97,7 +100,7 @@ export default function Stats() {
       <div className="t-band2">
         <div className="t-pane">
           <div className="t-pane-head">
-            <span className="t-label">NET WORTH · 12M</span>
+            <span className="t-label">{t('stats.netWorth12m')}</span>
             <span className="t-pane-meta">{worth.length ? `${mask(formatAbs(worth[0], 0))} → ${mask(formatAbs(worth[worth.length - 1], 0))} €` : ''}</span>
           </div>
           <NetWorthChart values={worth} />
@@ -109,12 +112,12 @@ export default function Stats() {
         </div>
         <div className="t-pane">
           <div className="t-pane-head">
-            <span className="t-label">INCOME VS EXPENSE · MONTHLY</span>
-            <span className="t-pane-meta">Ø {hidden ? MASK : `${avgNet < 0 ? '-' : '+'}${formatAbs(avgNet, 0)}`} €/M</span>
+            <span className="t-label">{t('stats.incomeVsExpense')}</span>
+            <span className="t-pane-meta">Ø {hidden ? MASK : `${avgNet < 0 ? '-' : '+'}${formatAbs(avgNet, 0)}`} {t('stats.perMonth')}</span>
           </div>
           <div className="t-bars">
             {flows.map((f) => (
-              <div key={f.key} title={hidden ? formatMonthKey(f.key) : `${formatMonthKey(f.key)} · in ${formatAbs(f.income)} · out ${formatAbs(f.expense)}`}>
+              <div key={f.key} title={hidden ? formatMonthKey(f.key) : t('stats.barTitle', { month: formatMonthKey(f.key), in: formatAbs(f.income), out: formatAbs(f.expense) })}>
                 <div style={{ height: `${(f.income / maxFlow) * 100}%`, background: 'var(--pos)' }} />
                 <div style={{ height: `${(f.expense / maxFlow) * 100}%`, background: 'var(--neg)' }} />
               </div>
@@ -131,19 +134,19 @@ export default function Stats() {
       <div className="t-band3">
         <div className="t-pane">
           <div className="t-pane-head">
-            <span className="t-label">SPEND BY CATEGORY · 90D</span>
-            <span className="t-pane-meta">{spend.length} CATEGOR{spend.length === 1 ? 'Y' : 'IES'}</span>
+            <span className="t-label">{t('stats.spendByCategory')}</span>
+            <span className="t-pane-meta">{tn('stats.categoriesCount', spend.length)}</span>
           </div>
-          {spend.length === 0 ? <div className="t-stats-empty">No expenses in the last 90 days.</div> : <Treemap rows={spend} hidden={hidden} onPick={filterCategory} />}
+          {spend.length === 0 ? <div className="t-stats-empty">{t('stats.noExpenses90')}</div> : <Treemap rows={spend} hidden={hidden} onPick={filterCategory} />}
         </div>
 
         <div className="t-pane">
           <div className="t-pane-head">
-            <span className="t-label">ALLOCATION</span>
-            <span className="t-pane-meta">{alloc.length} POSITION{alloc.length === 1 ? '' : 'S'}</span>
+            <span className="t-label">{t('stats.allocation')}</span>
+            <span className="t-pane-meta">{tn('stats.positionsCount', alloc.length)}</span>
           </div>
           {alloc.length === 0 ? (
-            <div className="t-stats-empty">No positive balances yet.</div>
+            <div className="t-stats-empty">{t('stats.noPositive')}</div>
           ) : (
             <>
               <div className="t-alloc-bar" aria-hidden="true">
@@ -164,10 +167,10 @@ export default function Stats() {
 
         <div className="t-pane">
           <div className="t-pane-head">
-            <span className="t-label">TOP EXPENSES · ALL TIME</span>
-            <span className="t-pane-meta">TOP {top.length}</span>
+            <span className="t-label">{t('stats.topExpenses')}</span>
+            <span className="t-pane-meta">{t('stats.top', { n: top.length })}</span>
           </div>
-          {top.length === 0 && <div className="t-stats-empty">No expenses yet.</div>}
+          {top.length === 0 && <div className="t-stats-empty">{t('stats.noExpenses')}</div>}
           {top.map((t) => (
             <div key={t.id} className="t-top-row">
               <span className="d">{formatDate(t.date)}</span>
@@ -179,10 +182,10 @@ export default function Stats() {
           ))}
 
           <div className="t-pane-head" style={{ margin: '16px 0 9px' }}>
-            <span className="t-label">BALANCE WITH PEOPLE · 6M</span>
-            <span className="t-pane-meta">{data.people.length} {data.people.length === 1 ? 'PERSON' : 'PEOPLE'}</span>
+            <span className="t-label">{t('stats.balanceWithPeople')}</span>
+            <span className="t-pane-meta">{tn('stats.peopleCount', data.people.length)}</span>
           </div>
-          {data.people.length === 0 && <div className="t-stats-empty">No people yet.</div>}
+          {data.people.length === 0 && <div className="t-stats-empty">{t('stats.noPeople')}</div>}
           {peopleSeries.map(({ person, series }) => (
             <div key={person.id} className="t-person-row">
               <span className="t-dot" style={{ background: person.color || '#6b7280' }} aria-hidden="true" />
@@ -245,17 +248,17 @@ function Treemap({ rows, hidden, onPick }: { rows: CategorySpend[]; hidden: bool
                 role="listitem"
                 className={clsx('t-tile', rankClass(t.rank))}
                 style={{ flex: Math.max(minFlex, (t.row.value / colTotal) * c.tiles.length), background: `var(--tm-${t.rank + 1})` }}
-                title={`${t.row.name}: filter the blotter`}
+                title={translate('stats.tileFilter', { name: t.row.name })}
                 onClick={() => onPick(t.row.name)}
               >
                 <div className="n">{t.row.name}</div>
                 <div className="v">{hidden ? MASK : `-${formatAbs(t.row.value)}`}</div>
-                {t.rank === 0 && <div className="m">{Math.round(t.row.share * 100)}% · {t.row.count} tx</div>}
+                {t.rank === 0 && <div className="m">{translate('stats.tileMeta', { pct: Math.round(t.row.share * 100), n: t.row.count })}</div>}
               </button>
             ))}
             {ci === cols.length - 1 && more > 0 && (
               <div className="t-tile more" style={{ flex: minFlex, background: 'var(--tm-9)' }}>
-                <div className="n">+ {more} more</div>
+                <div className="n">{translate('stats.more', { n: more })}</div>
               </div>
             )}
           </div>
@@ -268,12 +271,12 @@ function Treemap({ rows, hidden, onPick }: { rows: CategorySpend[]; hidden: bool
 function allocationNote(rows: ReturnType<typeof allocation>): string {
   if (rows.length === 0) return '';
   const top = rows[0];
-  const first = `${shortName(top.name)} holds ${Math.round(top.share * 100)}% of total value.`;
+  const first = translate('stats.allocNoteFirst', { name: shortName(top.name), pct: Math.round(top.share * 100) });
   const rest = rows.slice(1);
   if (rest.length === 0) return first;
   const restShare = Math.round(rest.reduce((s, r) => s + r.share, 0) * 100);
-  const names = rest.length <= 3 ? joinNames(rest.map((r) => shortName(r.name))) : `The other ${rest.length} positions`;
-  return `${first}\n${names} together ${restShare}%.`;
+  const names = rest.length <= 3 ? joinNames(rest.map((r) => shortName(r.name))) : translate('stats.allocOthers', { n: rest.length });
+  return `${first}\n${translate('stats.allocNoteRest', { names, pct: restShare })}`;
 }
 
 function shortName(n: string): string {
@@ -282,5 +285,5 @@ function shortName(n: string): string {
 
 function joinNames(ns: string[]): string {
   if (ns.length <= 1) return ns.join('');
-  return `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+  return `${ns.slice(0, -1).join(', ')} ${translate('stats.and')} ${ns[ns.length - 1]}`;
 }

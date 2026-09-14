@@ -4,21 +4,25 @@
 // TRF writes a linked pair between two accounts.
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
+import DateField from './DateField';
 import Typeahead from './Typeahead';
 import { LAST_ACCOUNT_KEY } from './CommandPalette';
 import { useToast } from '../Toast';
 import { useData } from '../../lib/data';
 import { errorMessage } from '../../lib/errors';
-import { todayDE, parseDateDEToISO } from '../../lib/format';
+import { todayISO, parseDateDEToISO } from '../../lib/format';
 import { formatAbs, formatDecimalDE, parseDecimal } from '../../lib/number';
 import { useBus } from '../../hooks/useBus';
+import { useI18n } from '../../hooks/useI18n';
 import type { CommitPlan } from '../../pages/Terminal';
 import type { QuickEntryPrefill } from '../../lib/bus';
 
 type Direction = 'in' | 'out' | 'trf';
 const DIR_KEY = 'tx:lastType';
-const DIRS: { value: Direction; label: string; title: string }[] = [
-  { value: 'in', label: 'IN', title: 'Income' }, { value: 'trf', label: 'TRF', title: 'Transfer' }, { value: 'out', label: 'OUT', title: 'Expense' },
+const DIRS: { value: Direction; labelKey: 'qe.dirIn' | 'qe.dirTrf' | 'qe.dirOut'; titleKey: 'type.income' | 'type.transfer' | 'type.expense' }[] = [
+  { value: 'in', labelKey: 'qe.dirIn', titleKey: 'type.income' },
+  { value: 'trf', labelKey: 'qe.dirTrf', titleKey: 'type.transfer' },
+  { value: 'out', labelKey: 'qe.dirOut', titleKey: 'type.expense' },
 ];
 
 function readDir(): Direction {
@@ -31,10 +35,11 @@ function readDir(): Direction {
 export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) => Promise<void> }) {
   const data = useData();
   const toast = useToast();
+  const { t } = useI18n();
   const [dir, setDir] = useState<Direction>(readDir);
   useEffect(() => { try { localStorage.setItem(DIR_KEY, dir === 'in' ? 'income' : dir === 'trf' ? 'transfer' : 'expense'); } catch {} }, [dir]);
 
-  const [dateDE, setDateDE] = useState(todayDE());
+  const [dateISO, setDateISO] = useState(todayISO);
   const [category, setCategory] = useState('');
   const [notes, setNotes] = useState('');
   const [amountStr, setAmountStr] = useState('');
@@ -56,7 +61,7 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
   useBus('focus:quick-entry', focusAmount);
   useBus('quick-entry:prefill', (p: QuickEntryPrefill) => {
     if (p.direction) setDir(p.direction);
-    if (p.date) setDateDE(p.date);
+    if (p.date) { const d = parseDateDEToISO(p.date); if (d) setDateISO(d); }
     if (p.category !== undefined) setCategory(p.category);
     if (p.notes !== undefined) setNotes(p.notes);
     if (p.amount !== undefined) setAmountStr(formatDecimalDE(p.amount));
@@ -79,7 +84,7 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
   });
 
   const isTrf = dir === 'trf';
-  const iso = parseDateDEToISO(dateDE);
+  const iso = dateISO || null;
   const amt = parseDecimal(amountStr);
   const share = parseDecimal(shareStr);
   const dateInvalid = !iso;
@@ -94,7 +99,7 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
   const flag = (c: boolean) => showErrors && c;
 
   const reset = () => {
-    setDateDE(todayDE()); setCategory(''); setNotes(''); setAmountStr('');
+    setDateISO(todayISO()); setCategory(''); setNotes(''); setAmountStr('');
     setAccText(''); setAccId(null); setPaidText(''); setPaidId(null); setShareStr(''); setDstText(''); setDstId(null);
     setShowErrors(false);
   };
@@ -116,7 +121,7 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
     const plan: CommitPlan = { label: '', steps: [] };
     if (isTrf) {
       plan.steps.push({ kind: 'transfer', input: { from_account_id: accId!, to_account_id: dstId!, date: iso, amount: total, description: desc, category: cat || null } });
-      plan.label = 'Transfer committed';
+      plan.label = t('commit.transfer');
       plan.description = `${formatAbs(total)} € · ${name(accId)} → ${name(dstId)}`;
     } else {
       const theirs = hasPaid ? (shareStr.trim() === '' ? total : (share as number)) : 0;
@@ -130,9 +135,11 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
         const to = dir === 'out' ? paidId! : accId!;
         plan.steps.push({ kind: 'transfer', input: { from_account_id: from, to_account_id: to, date: iso, amount: theirs, description: desc, category: cat } });
       }
-      plan.label = dir === 'out' ? 'Expense committed' : 'Income committed';
+      plan.label = dir === 'out' ? t('commit.expense') : t('commit.income');
       plan.description = hasPaid
-        ? own > 1e-9 ? `${formatAbs(own)} € yours, ${formatAbs(theirs)} € for ${name(paidId)}` : `${formatAbs(theirs)} € for ${name(paidId)}`
+        ? own > 1e-9
+          ? t('commit.splitBoth', { own: formatAbs(own), theirs: formatAbs(theirs), name: name(paidId) })
+          : t('commit.splitAll', { theirs: formatAbs(theirs), name: name(paidId) })
         : `${formatAbs(total)} € · ${cat} · ${name(accId)}`;
     }
     setBusy(true);
@@ -142,7 +149,7 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
       reset();
       focusAmount();
     } catch (err) {
-      toast.error('Could not commit', { description: errorMessage(err) });
+      toast.error(t('commit.failed'), { description: errorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -157,35 +164,35 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
   const peopleItems = useMemo(() => data.people.map((a) => ({ id: String(a.id), label: a.name, color: a.color ?? null })), [data.people]);
 
   return (
-    <form className="t-qe" onSubmit={submit} aria-label="Quick entry" noValidate>
-      <div className="t-dir" role="radiogroup" aria-label="Direction">
+    <form className="t-qe" onSubmit={submit} aria-label={t('qe.aria')} noValidate>
+      <div className="t-dir" role="radiogroup" aria-label={t('qe.direction')}>
         {DIRS.map((d) => (
-          <button key={d.value} type="button" role="radio" aria-checked={dir === d.value} title={d.title} className={clsx('t-dseg', d.value, dir === d.value && 'is-active')} onClick={() => setDir(d.value)}>
-            {d.label}
+          <button key={d.value} type="button" role="radio" aria-checked={dir === d.value} title={t(d.titleKey)} className={clsx('t-dseg', d.value, dir === d.value && 'is-active')} onClick={() => setDir(d.value)}>
+            {t(d.labelKey)}
           </button>
         ))}
       </div>
-      <input className={clsx('t-in w-date', flag(dateInvalid) && 'is-invalid')} value={dateDE} aria-label="Date" placeholder="dd.mm.yyyy" onChange={(e) => setDateDE(e.target.value)} onKeyDown={onKey} />
+      <DateField className="w-date" value={dateISO} onChange={setDateISO} ariaLabel={t('field.date')} invalid={flag(dateInvalid)} onKeyDown={onKey} />
       <Typeahead
         inputRef={categoryRef}
         items={categoryItems}
         value={category}
         onChange={setCategory}
-        placeholder={isTrf ? 'category' : 'category*'}
-        ariaLabel="Category"
+        placeholder={isTrf ? t('field.categoryPlaceholder') : t('qe.categoryRequired')}
+        ariaLabel={t('field.category')}
         className="w-cat"
         invalid={flag(catMissing)}
         onKeyDown={onKey}
         createHint
       />
-      <input className="t-in w-notes" value={notes} aria-label="Notes" placeholder="notes" onChange={(e) => setNotes(e.target.value)} onKeyDown={onKey} />
+      <input className="t-in w-notes" value={notes} aria-label={t('field.notes')} placeholder={t('field.notesPlaceholder')} onChange={(e) => setNotes(e.target.value)} onKeyDown={onKey} />
       <input
         ref={amountRef}
         className={clsx('t-in t-in--amount w-amt', flag(amountInvalid) && 'is-invalid')}
         inputMode="decimal"
         value={amountStr}
-        aria-label="Amount"
-        placeholder="0,00*"
+        aria-label={t('field.amount')}
+        placeholder={t('qe.amountPlaceholder')}
         onChange={(e) => setAmountStr(e.target.value)}
         onKeyDown={onKey}
       />
@@ -196,8 +203,8 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
         onChange={(t) => { setAccText(t); if (t.trim() === '') setAccId(null); }}
         onPick={(it) => setAccId(Number(it.id))}
         strict
-        placeholder={isTrf ? 'from*' : 'account*'}
-        ariaLabel={isTrf ? 'Source account' : 'Account'}
+        placeholder={isTrf ? t('qe.from') : t('qe.accountRequired')}
+        ariaLabel={isTrf ? t('qe.sourceAccount') : t('blotter.account')}
         className="w-acc"
         invalid={flag(accMissing || paidInvalid)}
         onKeyDown={onKey}
@@ -209,8 +216,8 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
           onChange={(t) => { setDstText(t); if (t.trim() === '') setDstId(null); }}
           onPick={(it) => setDstId(Number(it.id))}
           strict
-          placeholder="to*"
-          ariaLabel="Destination account"
+          placeholder={t('qe.to')}
+          ariaLabel={t('qe.destAccount')}
           className="w-acc"
           invalid={flag(dstInvalid)}
           onKeyDown={onKey}
@@ -223,28 +230,28 @@ export default function QuickEntry({ onCommit }: { onCommit: (plan: CommitPlan) 
             onChange={(t) => { setPaidText(t); if (t.trim() === '') { setPaidId(null); setShareStr(''); } }}
             onPick={(it) => setPaidId(Number(it.id))}
             strict
-            placeholder={dir === 'out' ? 'paid for…' : 'shared with…'}
-            ariaLabel={dir === 'out' ? 'Person you paid for (optional)' : 'Person who gets a share (optional)'}
+            placeholder={dir === 'out' ? t('qe.paidFor') : t('qe.sharedWith')}
+            ariaLabel={dir === 'out' ? t('qe.paidForAria') : t('qe.sharedWithAria')}
             className="w-paid"
             invalid={flag(paidInvalid)}
             onKeyDown={onKey}
-            emptyText="No people yet"
+            emptyText={t('qe.noPeople')}
           />
           {hasPaid && (
             <input
               className={clsx('t-in t-in--right w-share', flag(shareInvalid) && 'is-invalid')}
               inputMode="decimal"
               value={shareStr}
-              aria-label="Their share (empty = whole amount)"
-              title="Their share of the amount. Leave empty if the whole amount is theirs."
-              placeholder="share"
+              aria-label={t('qe.shareAria')}
+              title={t('qe.shareTitle')}
+              placeholder={t('qe.sharePlaceholder')}
               onChange={(e) => setShareStr(e.target.value)}
               onKeyDown={onKey}
             />
           )}
         </>
       )}
-      <button type="submit" className="t-btn t-btn--primary" disabled={busy} title="Commit (Enter)">COMMIT ⏎</button>
+      <button type="submit" className="t-btn t-btn--primary" disabled={busy} title={t('qe.commitTitle')}>{t('qe.commit')}</button>
     </form>
   );
 }

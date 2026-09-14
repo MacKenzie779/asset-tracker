@@ -10,10 +10,12 @@ import { flowSeries, lastMonthKeys, netThisMonth, netWorthSeries, pctChange, sav
 import { useData } from '../../lib/data';
 import { errorMessage } from '../../lib/errors';
 import { EXPORT_COLUMNS, readExportConfig, writeExportConfig, type ExportConfig } from '../../lib/exportConfig';
+import type { TKey } from '../../lib/i18n';
 import { formatPercent } from '../../lib/number';
 import { owedToYou, personBalanceState, totalValue, youOwe } from '../../lib/people';
 import { useShell } from '../../lib/shell';
 import { useBus } from '../../hooks/useBus';
+import { useI18n } from '../../hooks/useI18n';
 import { useExportFeedback } from '../../hooks/useExportFeedback';
 import type { Account, TransactionSearch } from '../../types';
 
@@ -25,6 +27,7 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
   const data = useData();
   const shell = useShell();
   const toast = useToast();
+  const { t, tn } = useI18n();
   const notifySaved = useExportFeedback();
   const { hidden } = shell;
 
@@ -60,7 +63,7 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
 
   const runExport = async () => {
     if (!canExport) {
-      if (noColumns) toast.error('Choose at least one column to export');
+      if (noColumns) toast.error(t('export.noColumns'));
       return;
     }
     setExportState('busy');
@@ -70,7 +73,7 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
       setExportState('saved');
       window.setTimeout(() => setExportState('idle'), 2000);
     } catch (e) {
-      toast.error('Export failed', { description: errorMessage(e) });
+      toast.error(t('export.failed'), { description: errorMessage(e) });
       setExportState('idle');
     }
   };
@@ -82,7 +85,7 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
   return (
     <>
       <div className="t-position">
-        <div className="t-label">POSITION</div>
+        <div className="t-label">{t('pos.label')}</div>
         <div className="t-pos-total">
           <span className="v">{data.loaded ? <Money value={total} hidden={hidden} sign="neg" tone="none" /> : '——'}</span>
           <span className="u">€</span>
@@ -95,31 +98,31 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
         </div>
         <div className="t-kpi2">
           <div>
-            <div className="l">NET THIS MONTH</div>
+            <div className="l">{t('pos.netThisMonth')}</div>
             <div className="v"><Money value={net} hidden={hidden} /></div>
           </div>
           <div>
-            <div className="l">SAVINGS RATE</div>
+            <div className="l">{t('pos.savingsRate')}</div>
             <div className={clsx('v', rate == null ? 'ink2' : rate < 0 ? 'neg' : 'pos')}>{rate == null ? '—' : hidden ? '•••' : formatPercent(rate)}</div>
           </div>
           <div>
-            <div className="l">RECEIVABLE</div>
+            <div className="l">{t('pos.receivable')}</div>
             <div className="v"><Money value={receivable} hidden={hidden} sign="none" tone={receivable > 0.005 ? 'pos' : 'none'} /></div>
           </div>
           <div>
-            <div className="l">PAYABLE</div>
+            <div className="l">{t('pos.payable')}</div>
             <div className="v"><Money value={payable} hidden={hidden} sign="none" tone={payable > 0.005 ? 'neg' : 'none'} /></div>
           </div>
         </div>
       </div>
 
       <div className="t-sec t-sec--tight">
-        <span className="t-label">ACCOUNTS · {accounts.length}</span>
+        <span className="t-label">{t('ledger.accountsCount', { n: accounts.length })}</span>
         <div className="t-sec-rule" />
-        <button type="button" className="t-btn--text" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'account' })}>+ ACCOUNT</button>
+        <button type="button" className="t-btn--text" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'account' })}>{t('ledger.addAccount')}</button>
       </div>
       <div className="t-pad">
-        {accounts.length === 0 && <div className="t-none">No accounts yet.</div>}
+        {accounts.length === 0 && <div className="t-none">{t('ledger.noAccounts')}</div>}
         {accounts.map((a) => (
           <div key={a.id}>
             <div className="t-acc-row">
@@ -127,12 +130,12 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
               <span className="n" title={a.name}>{a.name}</span>
               <span className="v"><Money value={a.balance} hidden={hidden} sign="neg" tone={a.balance < -0.005 ? 'neg' : 'none'} /></span>
               <MoreMenu
-                label={`${a.name}: actions`}
+                label={t('menu.actionsFor', { name: a.name })}
                 actions={[
-                  { label: 'RENAME', onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
-                  { label: 'CHANGE COLOR', onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
-                  { label: 'EDIT BALANCE', onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
-                  { label: 'DELETE', danger: true, onClick: () => shell.requestLedger('accounts', { kind: 'delete', id: a.id }) },
+                  { label: t('action.rename'), onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
+                  { label: t('action.changeColor'), onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
+                  { label: t('action.editBalance'), onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: a.id }) },
+                  { label: t('action.delete'), danger: true, onClick: () => shell.requestLedger('accounts', { kind: 'delete', id: a.id }) },
                 ]}
               />
             </div>
@@ -144,71 +147,71 @@ export default function LedgerTab({ sort, exportPayload, exportTotal, filterAcco
       </div>
 
       <div className="t-sec">
-        <span className="t-label">PEOPLE · {people.length}</span>
+        <span className="t-label">{t('ledger.peopleCount', { n: people.length })}</span>
         <div className="t-sec-rule" />
-        <button type="button" className="t-btn--text" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'person' })}>+ PERSON</button>
+        <button type="button" className="t-btn--text" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'person' })}>{t('ledger.addPerson')}</button>
       </div>
       <div className="t-pad">
-        {people.length === 0 && <div className="t-none">No open balances.</div>}
+        {people.length === 0 && <div className="t-none">{t('ledger.noOpenBalances')}</div>}
         {people.map((p) => {
           const st = personBalanceState(p.balance);
           return (
             <div key={p.id} className="t-ppl-row">
               <span className="t-dot" style={{ background: p.color || '#6b7280' }} aria-hidden="true" />
               <span className="n" title={p.name}>{p.name}</span>
-              <span className="d">{st === 'owes_you' ? 'OWES YOU' : st === 'you_owe' ? 'YOU OWE' : 'SETTLED'}</span>
+              <span className="d">{st === 'owes_you' ? t('people.owesYou') : st === 'you_owe' ? t('people.youOwe') : t('people.settled')}</span>
               <span className="v"><Money value={Math.abs(p.balance)} hidden={hidden} sign="none" tone={st === 'owes_you' ? 'pos' : st === 'you_owe' ? 'neg' : 'none'} /></span>
               <MoreMenu
-                label={`${p.name}: actions`}
+                label={t('menu.actionsFor', { name: p.name })}
                 actions={[
-                  { label: 'SETTLE UP', onClick: () => shell.openSettle(p.id), disabled: st === 'settled' },
-                  { label: 'RENAME', onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: p.id }) },
-                  { label: 'CHANGE COLOR', onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: p.id }) },
-                  { label: 'DELETE', danger: true, onClick: () => shell.requestLedger('accounts', { kind: 'delete', id: p.id }) },
+                  { label: t('action.settleUp'), onClick: () => shell.openSettle(p.id), disabled: st === 'settled' },
+                  { label: t('action.rename'), onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: p.id }) },
+                  { label: t('action.changeColor'), onClick: () => shell.requestLedger('accounts', { kind: 'edit', id: p.id }) },
+                  { label: t('action.delete'), danger: true, onClick: () => shell.requestLedger('accounts', { kind: 'delete', id: p.id }) },
                 ]}
               />
             </div>
           );
         })}
         <div className="t-actions">
-          <button type="button" className="t-btn t-btn--positive t-btn--wide" disabled={!anyOpen} onClick={() => shell.openSettle(settleTarget())} title="Settle up (Ctrl+S)">
-            SETTLE UP
+          <button type="button" className="t-btn t-btn--positive t-btn--wide" disabled={!anyOpen} onClick={() => shell.openSettle(settleTarget())} title={t('ledger.settleTitle')}>
+            {t('action.settleUp')}
           </button>
-          <button type="button" className="t-btn t-btn--secondary" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'person' })}>+ NEW</button>
+          <button type="button" className="t-btn t-btn--secondary" onClick={() => shell.requestLedger('accounts', { kind: 'add', type: 'person' })}>{t('action.new')}</button>
         </div>
       </div>
 
       <div className="t-sec t-sec--loose">
-        <span className="t-label">EXPORT · FILTERED RESULT</span>
+        <span className="t-label">{t('export.section')}</span>
         <div className="t-sec-rule" />
       </div>
       <div className="t-pad">
-        <div className="t-joined t-joined--raised" role="radiogroup" aria-label="Export format" style={{ marginBottom: 7 }}>
+        <div className="t-joined t-joined--raised" role="radiogroup" aria-label={t('export.formatAria')} style={{ marginBottom: 7 }}>
           {(['xlsx', 'pdf'] as const).map((f) => (
             <button key={f} type="button" role="radio" aria-checked={cfg.format === f} className={clsx('t-jseg', cfg.format === f && 'is-active')} onClick={() => setCfg((c) => ({ ...c, format: f }))}>
               {f.toUpperCase()}
             </button>
           ))}
         </div>
-        <div className="t-chips" role="group" aria-label="Columns">
+        <div className="t-chips" role="group" aria-label={t('export.columnsAria')}>
           {EXPORT_COLUMNS.map((c) => {
             const on = cfg.columns.includes(c.key);
             return (
               <button key={c.key} type="button" aria-pressed={on} className={clsx('t-chip', on && 'is-on')} onClick={() => toggleCol(c.key)}>
-                {c.label}{on ? ' ✓' : ''}
+                {t(`col.${c.key}` as TKey)}{on ? ' ✓' : ''}
               </button>
             );
           })}
         </div>
         <div className="t-actions" style={{ marginTop: 0 }}>
-          <button type="button" className="t-btn t-btn--primary t-btn--wide" disabled={!canExport && exportState === 'idle'} onClick={() => void runExport()} title="Export (Ctrl+E)">
-            {exportState === 'busy' ? 'EXPORTING…' : exportState === 'saved' ? 'SAVED ✓' : `EXPORT ${exportTotal} ROW${exportTotal === 1 ? '' : 'S'}`}
+          <button type="button" className="t-btn t-btn--primary t-btn--wide" disabled={!canExport && exportState === 'idle'} onClick={() => void runExport()} title={t('export.title')}>
+            {exportState === 'busy' ? t('export.busy') : exportState === 'saved' ? t('export.done') : tn('export.button', exportTotal)}
           </button>
           <button type="button" className="t-btn t-btn--secondary" onClick={() => shell.openSettle(filterAccount?.type === 'person' ? filterAccount.id : null)}>
-            STATEMENT…
+            {t('export.statement')}
           </button>
         </div>
-        <div className="t-help">Settlement statement needs a person. Saved to Downloads with a timestamp.</div>
+        <div className="t-help">{t('export.help')}</div>
       </div>
       <div className="t-spacer" style={{ minHeight: 12 }} />
     </>

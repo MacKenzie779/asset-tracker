@@ -166,6 +166,8 @@ html:not(.dark) {
 .t-seg:hover { color: var(--ink); }
 .t-seg.is-active { color: var(--on-accent); background: var(--accent-bg); }
 .t-seg svg { display: block; }
+/* Language chooser: same segment, a two-letter code instead of an icon. */
+.t-seg--text { font: 500 9.5px var(--font-mono); letter-spacing: 0.06em; }
 
 .t-main { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 
@@ -252,13 +254,57 @@ html:not(.dark) {
 }
 .t-title { font: 600 10px var(--font-mono); letter-spacing: 0.12em; color: var(--ink); }
 .t-search {
-  flex: 1; max-width: 200px; margin-left: 4px;
+  flex: 1; min-width: 120px; margin-left: 4px;
   background: var(--ground); border: 1px solid var(--rule); border-radius: 2px;
   padding: 3px 8px; font: 400 9.5px var(--font-mono); color: var(--ink); outline: none;
 }
 .t-search:focus { border-color: var(--accent); }
 .t-search::placeholder { color: var(--ink-meta); }
-.t-date-mini { width: 92px; padding: 2px 6px; font: 400 9.5px var(--font-mono); }
+
+/* ---------- date field + calendar popover ---------- */
+.t-datefield {
+  display: inline-flex; align-items: center; min-width: 0;
+  background: var(--ground); border: 1px solid var(--rule-strong); border-radius: 2px;
+  padding: 0 2px 0 7px; transition: border-color 100ms linear;
+}
+.t-datefield:focus-within { border-color: var(--accent); }
+.t-datefield.is-open { border-color: var(--accent); }
+.t-datefield.is-invalid { border-color: var(--neg); }
+.t-datefield-in {
+  flex: 1; width: 100%; min-width: 0; background: none; border: 0; outline: none;
+  padding: 5px 0; font: 400 10.5px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.t-datefield-btn { flex: none; padding: 0 4px; font: 400 9px var(--font-mono); line-height: 1; color: var(--ink-recessed); }
+.t-datefield-btn:hover, .t-datefield.is-open .t-datefield-btn { color: var(--accent); }
+.t-datefield--mini { width: 104px; padding-left: 6px; }
+.t-datefield--mini .t-datefield-in { padding: 2px 0; font-size: 9.5px; }
+
+.t-cal {
+  padding: 6px; z-index: 60;
+  background: var(--overlay-panel); border: 1px solid var(--rule-overlay); border-radius: 2px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+.t-cal-head { display: flex; align-items: center; gap: 6px; padding: 0 1px 6px; }
+.t-cal-title { flex: 1; text-align: center; font: 500 10px var(--font-mono); letter-spacing: 0.1em; color: var(--ink); }
+.t-cal-nav {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  font: 400 12px var(--font-mono); color: var(--ink-2); border-radius: 2px;
+}
+.t-cal-nav:hover { color: var(--ink); background: var(--overlay-row); }
+.t-cal-wd, .t-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.t-cal-wd { padding-bottom: 4px; margin-bottom: 4px; border-bottom: 1px solid var(--rule); }
+.t-cal-wd span { text-align: center; font: 500 8.5px var(--font-mono); letter-spacing: 0.06em; color: var(--ink-recessed); }
+.t-cal-day {
+  display: flex; align-items: center; justify-content: center; height: 20px; border-radius: 2px;
+  font: 400 10px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-table);
+}
+.t-cal-day:hover:not(:disabled) { background: var(--overlay-row); color: var(--ink); }
+.t-cal-day.is-out { color: var(--ink-recessed); }
+.t-cal-day.is-today { color: var(--accent); }
+.t-cal-day.is-selected { color: var(--on-accent); background: var(--accent-bg); }
+.t-cal-day:disabled { color: var(--ink-afford); cursor: not-allowed; }
+.t-cal-foot { display: flex; align-items: center; padding-top: 6px; margin-top: 5px; border-top: 1px solid var(--rule); }
+.t-cal-foot .t-btn--text:disabled { color: var(--ink-afford); text-decoration: none; }
 
 .t-errbar {
   display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 12px; flex: none;
@@ -283,8 +329,8 @@ html:not(.dark) {
 .t-dseg.is-active.in { color: var(--on-accent); background: var(--pos-bg); border-color: var(--pos-bg); }
 .t-dseg.is-active.out { color: var(--on-accent); background: var(--neg-bg); border-color: var(--neg-bg); }
 .t-dseg.is-active.trf { color: var(--on-accent); background: var(--accent-bg); border-color: var(--accent-bg); }
-.t-qe .t-in { flex: none; }
-.t-qe .w-date { width: 84px; }
+.t-qe .t-in, .t-qe .t-datefield { flex: none; }
+.t-qe .w-date { width: 100px; }
 .t-qe .w-cat { width: 130px; }
 .t-qe .w-notes { flex: 1; min-width: 0; }
 .t-qe .w-amt { width: 92px; }
@@ -331,6 +377,10 @@ html:not(.dark) {
 .t-more:hover { color: var(--ink); }
 .t-row.is-editing { background: var(--row-active); box-shadow: inset 2px 0 0 var(--accent); }
 .t-row.is-editing .t-in { padding: 2px 5px; font-size: 10.5px; height: 21px; width: 100%; }
+.t-row.is-editing { grid-template-columns: 96px 152px 1fr 108px 152px 46px; }
+.t-row.is-editing .t-datefield { height: 21px; width: 100%; padding: 0 1px 0 5px; }
+.t-row.is-editing .t-datefield-in { padding: 0; font-size: 10.5px; }
+.t-row.is-editing .t-datefield-btn { padding: 0 3px; }
 .t-row.is-editing .c-cat, .t-row.is-editing .c-acc { gap: 4px; padding-right: 6px; }
 .t-row.is-editing .c-notes, .t-row.is-editing .c-val, .t-row.is-editing .c-date { padding-right: 6px; }
 .t-row.is-editing .c-act { display: flex; justify-content: flex-end; gap: 6px; }
@@ -597,6 +647,7 @@ html:not(.dark) {
 @media (max-width: 1400px) {
   .t-terminal { grid-template-columns: 1fr 300px; }
   .t-grid { grid-template-columns: 82px 132px 1fr 104px 120px 40px; }
+  .t-row.is-editing { grid-template-columns: 94px 132px 1fr 104px 120px 40px; }
   .t-qe .w-cat { width: 118px; }
   .t-qe .w-acc { width: 118px; }
   .t-qe .w-paid { width: 96px; }
@@ -604,6 +655,7 @@ html:not(.dark) {
 @media (max-width: 1100px) {
   .t-terminal { grid-template-columns: 1fr 280px; }
   .t-grid { grid-template-columns: 76px 116px 1fr 96px 104px 36px; }
+  .t-row.is-editing { grid-template-columns: 92px 116px 1fr 96px 104px 36px; }
   .t-header { gap: 10px; }
   .t-band3 { grid-template-columns: 1fr 1fr; }
   .t-band3 .t-pane:nth-child(3) { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--rule); }

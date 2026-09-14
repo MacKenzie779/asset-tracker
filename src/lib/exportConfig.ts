@@ -2,12 +2,13 @@
 export type ExportFormat = 'xlsx' | 'pdf';
 export type ExportConfig = { format: ExportFormat; columns: string[] };
 
+/** Column keys; the labels come from the `col.*` i18n keys of the same name. */
 export const EXPORT_COLUMNS = [
-  { key: 'date', label: 'DATE' },
-  { key: 'account', label: 'ACCOUNT' },
-  { key: 'category', label: 'CATEGORY' },
-  { key: 'description', label: 'NOTES' },
-  { key: 'amount', label: 'VALUE' },
+  { key: 'date' },
+  { key: 'account' },
+  { key: 'category' },
+  { key: 'description' },
+  { key: 'amount' },
 ] as const;
 
 const KEY = 'assettracker.export';

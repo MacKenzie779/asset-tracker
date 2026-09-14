@@ -15,6 +15,7 @@ import { formatDate, formatDayMonth, todayDE, parseDateDEToISO } from '../../lib
 import { formatAbs, parseDecimal } from '../../lib/number';
 import { computeOpenItems, selectByTarget } from '../../lib/settlement';
 import { useShell } from '../../lib/shell';
+import { useI18n } from '../../hooks/useI18n';
 import { useExportFeedback } from '../../hooks/useExportFeedback';
 import { readLastAccount } from './CommandPalette';
 
@@ -32,6 +33,7 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
   const data = useData();
   const toast = useToast();
   const notifySaved = useExportFeedback();
+  const { t, tn } = useI18n();
   const { hidden } = useShell();
   const person = personId != null ? data.accountById.get(personId) ?? null : null;
   const people = data.people;
@@ -66,8 +68,8 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
   }, [data.standardAccounts]);
 
   useEffect(() => {
-    const t = window.setTimeout(() => targetRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
+    const handle = window.setTimeout(() => targetRef.current?.focus(), 0);
+    return () => window.clearTimeout(handle);
   }, [person?.id]);
 
   useEffect(() => {
@@ -104,13 +106,13 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
     try {
       const from = theyOwe ? person.id : accountId;
       const to = theyOwe ? accountId : person.id;
-      await addTransfer({ from_account_id: from, to_account_id: to, date: parseDateDEToISO(todayDE())!, amount: sum, description: `Settlement ${person.name}`, category: null });
+      await addTransfer({ from_account_id: from, to_account_id: to, date: parseDateDEToISO(todayDE())!, amount: sum, description: t('settle.description', { name: person.name }), category: null });
       try { localStorage.setItem(SETTLE_ACCOUNT_KEY, String(accountId)); } catch {}
-      toast.success('Settlement booked', { description: `${formatAbs(sum)} € · ${person.name} ↔ ${data.accountById.get(accountId)?.name ?? ''}` });
+      toast.success(t('settle.booked'), { description: `${formatAbs(sum)} € · ${person.name} ↔ ${data.accountById.get(accountId)?.name ?? ''}` });
       afterMutation();
       onClose();
     } catch (e) {
-      toast.error('Could not book the settlement', { description: errorMessage(e) });
+      toast.error(t('settle.bookFailed'), { description: errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -120,14 +122,14 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
     if (!person || busy) return;
     setBusy(true);
     try {
-      const t = parseDecimal(target);
-      const tv = t !== null && t > 0 ? t : undefined;
+      const parsedTarget = parseDecimal(target);
+      const tv = parsedTarget !== null && parsedTarget > 0 ? parsedTarget : undefined;
       const filters = { account_id: person.id, tx_type: 'all' as const };
       const cols = cfg.columns.length ? cfg.columns : undefined;
       const path = cfg.format === 'pdf' ? await exportSettlementReportPdf(filters, cols, tv) : await exportSettlementReportXlsx(filters, cols, tv);
       notifySaved(path);
     } catch (e) {
-      toast.error('Statement export failed', { description: errorMessage(e) });
+      toast.error(t('settle.exportFailed'), { description: errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -137,10 +139,10 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
 
   return (
     <div className="t-scrim t-scrim--right" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="t-sheet" role="dialog" aria-modal="true" aria-label="Settle up">
+      <div className="t-sheet" role="dialog" aria-modal="true" aria-label={t('settle.aria')}>
         <div className="t-sheet-head">
           {person && <span className="t-dot t-dot--7" style={{ background: person.color ?? '#6b7280' }} />}
-          <span className="h">{person ? `Settle up — ${person.name}` : 'Settle up'}</span>
+          <span className="h">{person ? t('settle.titleWith', { name: person.name }) : t('settle.aria')}</span>
           <div className="t-spacer" />
           <button type="button" className="esc" onClick={onClose}>ESC</button>
         </div>
@@ -148,8 +150,8 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
         <div className="t-sheet-body">
           {!person && (
             <div className="t-sheet-block">
-              <div className="t-label" style={{ marginBottom: 8 }}>CHOOSE A PERSON</div>
-              {people.length === 0 && <div className="t-none">No people yet. Add one in the ledger column’s ACCOUNTS tab.</div>}
+              <div className="t-label" style={{ marginBottom: 8 }}>{t('settle.choosePerson')}</div>
+              {people.length === 0 && <div className="t-none">{t('settle.noPeople')}</div>}
               <div className="t-pick">
                 {people.map((p) => (
                   <button key={p.id} type="button" className="t-chip" onClick={() => onPick(p.id)}>
@@ -164,12 +166,12 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
           {person && openItems && (
             <>
               <div className="t-sheet-block">
-                <div className="t-label">{theyOwe ? `${person.name.toUpperCase()} OWES YOU` : `YOU OWE ${person.name.toUpperCase()}`}</div>
+                <div className="t-label">{theyOwe ? t('settle.owesYou', { name: person.name.toUpperCase() }) : t('settle.youOwe', { name: person.name.toUpperCase() })}</div>
                 <div className={clsx('t-sheet-big', theyOwe ? 'pos' : 'neg')}>
                   <Money value={Math.abs(person.balance)} hidden={hidden} sign="none" tone="none" /> €
                 </div>
                 <div className="t-sheet-sub">
-                  {items.length} open item{items.length === 1 ? '' : 's'}{oldest ? ` · oldest ${formatDate(oldest)}` : ''}
+                  {tn('settle.openItems', items.length)}{oldest ? ` · ${t('settle.oldest', { date: formatDate(oldest) })}` : ''}
                 </div>
               </div>
 
@@ -182,41 +184,41 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
                     <button key={o.tx.id} type="button" className={clsx('t-item-row', on && 'is-on')} onClick={() => toggle(o.tx.id, o.remaining)} aria-pressed={on}>
                       <span className="t-check" aria-hidden="true">✓</span>
                       <span className="d">{formatDayMonth(o.tx.date)}</span>
-                      <span className="n t-truncate">{o.tx.description || o.tx.category || '—'}{partial ? ' (partial)' : ''}</span>
+                      <span className="n t-truncate">{o.tx.description || o.tx.category || '—'}{partial ? t('settle.partial') : ''}</span>
                       <span className="v"><Money value={amt} hidden={hidden} sign="none" tone="none" /></span>
                     </button>
                   );
                 })}
-                {items.length === 0 && <div className="t-none">Nothing open. {Math.abs(person.balance) > 0.005 ? 'The balance comes from entries before the last full settlement.' : ''}</div>}
+                {items.length === 0 && <div className="t-none">{t('settle.nothingOpen')} {Math.abs(person.balance) > 0.005 ? t('settle.balanceFromBefore') : ''}</div>}
               </div>
 
               <div className="t-sheet-block">
-                <div className="t-label" style={{ marginBottom: 6 }}>TARGET AMOUNT</div>
+                <div className="t-label" style={{ marginBottom: 6 }}>{t('settle.targetAmount')}</div>
                 <input
                   ref={targetRef}
                   className="t-in t-in--big"
                   inputMode="decimal"
                   placeholder={formatAbs(openItems.total)}
-                  aria-label="Target amount"
+                  aria-label={t('settle.targetAria')}
                   value={target}
                   onChange={(e) => applyTarget(e.target.value)}
                 />
-                <div className="t-help" style={{ fontSize: 9.5 }}>Selects oldest items first until the target is reached.</div>
+                <div className="t-help" style={{ fontSize: 9.5 }}>{t('settle.targetHelp')}</div>
               </div>
 
               <div className="t-sheet-block" style={{ paddingTop: 0 }}>
-                <div className="t-label" style={{ marginBottom: 6 }}>{theyOwe ? 'RECEIVE ON' : 'PAY FROM'}</div>
+                <div className="t-label" style={{ marginBottom: 6 }}>{theyOwe ? t('settle.receiveOn') : t('settle.payFrom')}</div>
                 <Typeahead
                   items={accountItems}
                   value={accountText}
                   onChange={setAccountText}
                   onPick={(it) => setAccountId(Number(it.id))}
                   strict
-                  placeholder="account*"
-                  ariaLabel={theyOwe ? 'Account that receives the money' : 'Account that pays'}
+                  placeholder={t('settle.accountRequired')}
+                  ariaLabel={theyOwe ? t('settle.receiveAria') : t('settle.payAria')}
                   className="w-full"
                 />
-                <div className="t-help" style={{ fontSize: 9.5 }}>Booked as a transfer dated today; the person’s balance drops by the booked amount.</div>
+                <div className="t-help" style={{ fontSize: 9.5 }}>{t('settle.accountHelp')}</div>
               </div>
             </>
           )}
@@ -225,9 +227,9 @@ function Sheet({ personId, onPick, onClose }: { personId: number | null; onPick:
         {person && (
           <div className="t-sheet-foot">
             <button type="button" className="t-btn t-btn--positive t-btn--wide" onClick={() => void book()} disabled={busy || sum <= 0.005 || !accountId}>
-              BOOK SETTLEMENT{sum > 0.005 ? ` · ${formatAbs(sum)}` : ''}
+              {t('settle.book')}{sum > 0.005 ? ` · ${formatAbs(sum)}` : ''}
             </button>
-            <button type="button" className="t-btn t-btn--secondary" onClick={() => void exportStatement()} disabled={busy} title="Export the settlement statement">
+            <button type="button" className="t-btn t-btn--secondary" onClick={() => void exportStatement()} disabled={busy} title={t('settle.exportTitle')}>
               {cfg.format.toUpperCase()}
             </button>
           </div>

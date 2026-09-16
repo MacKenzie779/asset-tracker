@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getLang } from './i18n';
 import type {
   Account, NewAccount, UpdateAccount,
   Transaction, NewTransaction, UpdateTransaction, NewTransfer, TransferIds,
@@ -56,18 +57,18 @@ export async function searchTransactions(filters: TransactionSearch): Promise<Tr
   return invoke<TransactionSearchResult>('search_transactions', { filters });
 }
 export async function exportTransactionsXlsx(filters: TransactionSearch, columns?: string[]): Promise<string> {
-  return invoke<string>('export_transactions_xlsx', { filters, columns });
+  return invoke<string>('export_transactions_xlsx', { filters, columns, lang: getLang() });
 }
 export async function exportTransactionsPdf(filters: TransactionSearch, columns?: string[]): Promise<string> {
-  return invoke<string>('export_transactions_pdf', { filters, columns });
+  return invoke<string>('export_transactions_pdf', { filters, columns, lang: getLang() });
 }
 
 /* settlement statement for a person account (open items, oldest first) */
 export async function exportSettlementReportXlsx(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
-  return invoke<string>('export_settlement_report_xlsx', { filters, columns, targetValue });
+  return invoke<string>('export_settlement_report_xlsx', { filters, columns, targetValue, lang: getLang() });
 }
 export async function exportSettlementReportPdf(filters: TransactionSearch, columns?: string[], targetValue?: number): Promise<string> {
-  return invoke<string>('export_settlement_report_pdf', { filters, columns, targetValue });
+  return invoke<string>('export_settlement_report_pdf', { filters, columns, targetValue, lang: getLang() });
 }
 
 /* categories */

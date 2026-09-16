@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use printpdf::{Color, IndirectFontRef, Line, Mm, PdfLayerReference, Point, Rgb};
+mod i18n;
+mod pdf;
+
 use serde::{Deserialize, Serialize};
 use sqlx::Arguments;
 use sqlx::{
@@ -742,9 +744,13 @@ async fn export_transactions_xlsx(
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
     columns: Option<Vec<String>>,
+    lang: Option<String>,
 ) -> Result<String, String> {
     use chrono::{Datelike, Local, NaiveDate};
+    use crate::i18n::Lang;
     use rust_xlsxwriter::{Color, ExcelDateTime, Format, Workbook};
+
+    let lang = Lang::from_code(lang.as_deref());
 
     /* ---------- Build WHERE + ORDER like search_transactions ---------- */
     let mut where_sql = String::new();
@@ -788,7 +794,7 @@ async fn export_transactions_xlsx(
             .map_err(|e| e.to_string())?;
         name_opt.unwrap_or_else(|| format!("Account #{acc_id}"))
     } else {
-        "All accounts".to_string()
+        lang.all_accounts().to_string()
     };
 
     // Pretty dd.mm.yyyy for filter strings
@@ -801,9 +807,9 @@ async fn export_transactions_xlsx(
     // Time span label
     let time_span_label = match (filters.date_from.as_deref(), filters.date_to.as_deref()) {
         (Some(df), Some(dt)) => format!("{} – {}", fmt_dmy(df), fmt_dmy(dt)),
-        (Some(df), None) => format!("since {}", fmt_dmy(df)),
-        (None, Some(dt)) => format!("until {}", fmt_dmy(dt)),
-        _ => "All time".to_string(),
+        (Some(df), None) => lang.from_date(&fmt_dmy(df)),
+        (None, Some(dt)) => lang.until_date(&fmt_dmy(dt)),
+        _ => lang.all_time().to_string(),
     };
 
     let generated_at = Local::now().format("%d.%m.%Y %H:%M").to_string();
@@ -870,12 +876,12 @@ async fn export_transactions_xlsx(
     let mut current_row: u32 = 0;
 
     sheet
-        .write_string_with_format(current_row, 0, "Transactions export", &title_fmt)
+        .write_string_with_format(current_row, 0, lang.x_transactions_export(), &title_fmt)
         .map_err(|e| e.to_string())?;
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Account", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_account(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &account_label)
@@ -883,7 +889,7 @@ async fn export_transactions_xlsx(
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Time span", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_time_span(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &time_span_label)
@@ -891,7 +897,7 @@ async fn export_transactions_xlsx(
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Generated", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_generated(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &generated_at)
@@ -902,11 +908,11 @@ async fn export_transactions_xlsx(
     let table_start_row = current_row;
     for (i, key) in cols.iter().enumerate() {
         let label = match key.as_str() {
-            "date" => "Date",
-            "account" => "Account",
-            "category" => "Category",
-            "description" => "Notes",
-            "amount" => "Value",
+            "date" => lang.x_date(),
+            "account" => lang.x_account(),
+            "category" => lang.x_category(),
+            "description" => lang.x_notes(),
+            "amount" => lang.x_value(),
             _ => key,
         };
         sheet
@@ -929,11 +935,11 @@ async fn export_transactions_xlsx(
     let header_labels: Vec<&str> = cols
         .iter()
         .map(|k| match k.as_str() {
-            "date" => "Date",
-            "account" => "Account",
-            "category" => "Category",
-            "description" => "Notes",
-            "amount" => "Value",
+            "date" => lang.x_date(),
+            "account" => lang.x_account(),
+            "category" => lang.x_category(),
+            "description" => lang.x_notes(),
+            "amount" => lang.x_value(),
             _ => k,
         })
         .collect();
@@ -1031,7 +1037,7 @@ async fn export_transactions_xlsx(
     let label_col: u16 = 0;
 
     sheet
-        .write_string_with_format(summary_row_start, label_col, "Total income", &label_fmt)
+        .write_string_with_format(summary_row_start, label_col, lang.x_total_income(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_number_with_format(
@@ -1048,7 +1054,7 @@ async fn export_transactions_xlsx(
         .write_string_with_format(
             summary_row_start + 1,
             label_col,
-            "Total expenses",
+            lang.x_total_expenses(),
             &label_fmt,
         )
         .map_err(|e| e.to_string())?;
@@ -1065,7 +1071,7 @@ async fn export_transactions_xlsx(
 
     let saldo = sum_init + sum_income + sum_expense;
     sheet
-        .write_string_with_format(summary_row_start + 2, label_col, "Saldo", &label_fmt)
+        .write_string_with_format(summary_row_start + 2, label_col, lang.x_saldo(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_number_with_format(
@@ -1097,10 +1103,35 @@ async fn export_transactions_pdf(
     state: tauri::State<'_, AppState>,
     filters: TxSearch,
     columns: Option<Vec<String>>,
+    lang: Option<String>,
 ) -> Result<String, String> {
-    use printpdf::{BuiltinFont, IndirectFontRef, Mm, PdfDocument};
-    use std::fs::File;
-    use std::io::{BufWriter, Cursor};
+    use crate::i18n::Lang;
+
+    let lang = Lang::from_code(lang.as_deref());
+    let pool = current_pool(&state).await;
+
+    let download_dir = app
+        .path()
+        .download_dir()
+        .map_err(|_| "No downloads directory")?;
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let path = std::path::PathBuf::from(download_dir).join(format!("transactions_{}.pdf", ts));
+
+    build_transactions_pdf(&pool, filters, columns, lang, &path).await?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Builds the transactions PDF and writes it to `path`. Split out of the
+/// command so it can be driven from tests against a real database, without a
+/// Tauri `AppHandle`.
+async fn build_transactions_pdf(
+    pool: &SqlitePool,
+    filters: TxSearch,
+    columns: Option<Vec<String>>,
+    lang: crate::i18n::Lang,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    use crate::pdf::{self, Cell, Col, Header, Report};
 
     /* ---------- fetch rows (respect current filters + sort) ---------- */
     let mut where_sql = String::new();
@@ -1117,258 +1148,41 @@ async fn export_transactions_pdf(
     );
     sql.push_str(&where_sql);
     sql.push_str(&order_sql);
-    let pool = current_pool(&state).await;
 
     let mut q = sqlx::query_as::<_, TransactionOut>(&sql);
     for a in &args {
         match a {
-            BindArg::I(v) => {
-                q = q.bind(*v);
-            }
-            BindArg::S(s) => {
-                q = q.bind(s);
-            }
+            BindArg::I(v) => q = q.bind(*v),
+            BindArg::S(s) => q = q.bind(s),
         }
     }
-    let items = q.fetch_all(&pool).await.map_err(|e| e.to_string())?;
+    let items = q.fetch_all(pool).await.map_err(|e| e.to_string())?;
 
-    /* ---------- metadata strings ---------- */
+    /* ---------- meta ---------- */
     let account_label = if let Some(acc_id) = filters.account_id {
         let name: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = ?")
             .bind(acc_id)
-            .fetch_optional(&pool)
+            .fetch_optional(pool)
             .await
             .map_err(|e| e.to_string())?;
         name.map(|(n,)| n)
             .unwrap_or_else(|| format!("Account #{}", acc_id))
     } else {
-        "All accounts".to_string()
+        lang.all_accounts().to_string()
     };
 
     let timespan_label = match (&filters.date_from, &filters.date_to) {
-        (Some(df), Some(dt)) => format!("{} – {}", iso_to_de(df), iso_to_de(dt)),
-        (Some(df), None) => format!("from {}", iso_to_de(df)),
-        (None, Some(dt)) => format!("until {}", iso_to_de(dt)),
-        _ => "All time".to_string(),
+        (Some(df), Some(dt)) => format!("{} – {}", pdf::iso_to_de(df), pdf::iso_to_de(dt)),
+        (Some(df), None) => lang.from_date(&pdf::iso_to_de(df)),
+        (None, Some(dt)) => lang.until_date(&pdf::iso_to_de(dt)),
+        _ => lang.all_time().to_string(),
     };
 
-    let generated_label = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
-
-    /* ---------- output path ---------- */
-    let download_dir = app.path().download_dir().map_err(|_| "No downloads directory")?;
-    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let path = std::path::PathBuf::from(download_dir).join(format!("transactions_{}.pdf", ts));
-
-    /* ---------- PDF canvas ---------- */
-    let page_w = Mm(210.0);
-    let page_h = Mm(297.0);
-    let m_l = Mm(14.0);
-    let m_r = Mm(14.0);
-    let m_t = Mm(16.0);
-    let m_b = Mm(18.0);
-    let content_w = page_w.0 - m_l.0 - m_r.0;
-
-    let (doc, page_id, layer_id) =
-        PdfDocument::new("Transactions Export", page_w, page_h, "Layer 1");
-
-    /* ---------- fonts (embed DejaVu if present) ---------- */
-    fn load_font(
-        doc: &printpdf::PdfDocumentReference,
-        file: &str,
-        fallback: BuiltinFont,
-    ) -> Result<IndirectFontRef, String> {
-        let path = format!("{}/assets/{}", env!("CARGO_MANIFEST_DIR"), file);
-        match std::fs::read(&path) {
-            Ok(bytes) => doc
-                .add_external_font(Cursor::new(bytes))
-                .map_err(|e| e.to_string()),
-            Err(_) => doc.add_builtin_font(fallback).map_err(|e| e.to_string()),
-        }
-    }
-    let font_normal = load_font(&doc, "DejaVuSans.ttf", BuiltinFont::Helvetica)?;
-    let font_bold = load_font(&doc, "DejaVuSans-Bold.ttf", BuiltinFont::HelveticaBold)?;
-
-    /* ---------- sizes ---------- */
-    let fs_title = 13.0;
-    let fs_meta = 9.5;
-    let fs_head = 10.2;
-    let fs_cell = 9.7;
-    let header_h = 9.0;
-    let row_h = 7.2;
-    let pad = 1.8; // cell inner padding (mm)
-
-    /* ---------- columns ---------- */
-    let cols: Vec<String> = columns.unwrap_or_else(|| {
-        vec![
-            "date".into(),
-            "account".into(),
-            "category".into(),
-            "description".into(),
-            "amount".into(),
-        ]
-    });
-
-    fn base_width_for(col: &str) -> f64 {
-        match col {
-            "date" => 24.0,
-            "account" => 36.0,
-            "category" => 36.0,
-            "amount" => 28.0,
-            _ => 24.0,
-        }
-    }
-    // compute widths (description expands)
-    let mut sum_fixed = 0.0;
-    let mut has_desc = false;
-    for c in &cols {
-        if c == "description" {
-            has_desc = true;
-            continue;
-        }
-        sum_fixed += base_width_for(c);
-    }
-    let mut col_w_mm: Vec<f64> = Vec::with_capacity(cols.len());
-    for c in &cols {
-        if c == "description" && has_desc {
-            let w = (content_w - sum_fixed).max(24.0);
-            col_w_mm.push(w);
-        } else {
-            col_w_mm.push(base_width_for(c));
-        }
-    }
-
-    /* ---------- drawing state ---------- */
-    let mut page = page_id;
-    let mut layer = layer_id;
-    let mut layer_ref = doc.get_page(page).get_layer(layer);
-    let mut y = page_h.0 - m_t.0;
-
-    /* ---------- top meta block ---------- */
-    draw_text(
-        &layer_ref,
-        &font_bold,
-        "Transactions (filtered export)",
-        m_l.0,
-        y,
-        fs_title,
-        black(),
-    );
-    y -= 4.0 + row_h;
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Account: {}", account_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
-    );
-    y -= row_h;
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Time span: {}", timespan_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
-    );
-    y -= row_h;
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Generated: {}", generated_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
-    );
-    y -= row_h + 2.0;
-
-    /* ---------- header band ---------- */
-    draw_table_header(
-        &layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad,
-    );
-    y -= header_h;
-
-    /* ---------- rows ---------- */
+    /* ---------- totals (unchanged classification) ---------- */
     let mut sum_income: f64 = 0.0;
     let mut sum_expense: f64 = 0.0;
     let mut sum_init: f64 = 0.0;
-
-    for (row_idx, it) in items.iter().enumerate() {
-        // page break (keep some space for summary)
-        if y < m_b.0 + (row_h * 4.0) {
-            let (np, nl) = doc.add_page(page_w, page_h, "Layer");
-            page = np;
-            layer = nl;
-            layer_ref = doc.get_page(page).get_layer(layer);
-            y = page_h.0 - m_t.0;
-            draw_table_header(
-                &layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head,
-                pad,
-            );
-            y -= header_h;
-        }
-
-        // zebra bg
-        if row_idx % 2 == 1 {
-            draw_rect(
-                &layer_ref,
-                m_l.0,
-                y,
-                content_w,
-                row_h,
-                Some(row_alt()),
-                None,
-            );
-        }
-
-        // vertical grid (inner + outer)
-        {
-            let mut gx = m_l.0;
-            draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18))); // left border
-            for (_, w) in col_w_mm.iter().enumerate() {
-                gx += *w;
-                draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
-            }
-        }
-
-        // values in order of cols
-        let mut x = m_l.0;
-        for (i, w) in col_w_mm.iter().enumerate() {
-            let key = cols[i].as_str();
-            if key == "amount" {
-                // SAFEST: left-align inside the cell to guarantee it's inside the box
-                let s_full = format!("{} €", format_amount_eu(it.amount));
-                let s = clip_by_max_chars(&s_full, *w, fs_cell, pad);
-                let color = if it.amount < 0.0 { expense() } else { income() };
-                draw_text(&layer_ref, &font_bold, &s, x + pad, y, fs_cell, color);
-            } else {
-                let content = match key {
-                    "date" => iso_to_de(&it.date),
-                    "account" => it.account_name.clone(),
-                    "category" => it.category.clone().unwrap_or_default(),
-                    "description" => it.description.clone().unwrap_or_default(),
-                    other => other.to_string(),
-                };
-                let s = clip_for_width_with_font(&font_normal, &content, *w, fs_cell, pad);
-                draw_text(&layer_ref, &font_normal, &s, x + pad, y, fs_cell, black());
-            }
-            x += *w;
-        }
-
-        // horizontal hairline
-        draw_rect(
-            &layer_ref,
-            m_l.0,
-            y,
-            content_w,
-            0.1,
-            None,
-            Some((grid(), 0.18)),
-        );
-
+    for it in &items {
         let lower = it
             .category
             .as_deref()
@@ -1376,9 +1190,8 @@ async fn export_transactions_pdf(
             .unwrap_or_default();
         let is_transfer = lower == "transfer" || it.transfer_id.is_some();
         let is_init = lower == "init";
-
         if is_init {
-            sum_init += it.amount; // <— collect initial balance
+            sum_init += it.amount;
         }
         if !is_transfer && !is_init {
             if it.amount > 0.0 {
@@ -1388,350 +1201,150 @@ async fn export_transactions_pdf(
                 sum_expense += it.amount;
             }
         }
-
-        y -= row_h;
     }
-
-    /* ---------- summary ---------- */
     let saldo = sum_init + sum_income + sum_expense;
-    if y < m_b.0 + (row_h * 4.0) {
-        let (np, nl) = doc.add_page(page_w, page_h, "Layer");
-        page = np;
-        layer = nl;
-        layer_ref = doc.get_page(page).get_layer(layer);
-        y = page_h.0 - m_t.0;
-    }
 
-    y -= 2.0;
-    draw_rect(
-        &layer_ref,
-        m_l.0,
-        y,
-        content_w,
-        row_h * 3.0,
-        Some(total_bg()),
-        Some((grid(), 0.3)),
+    /* ---------- layout ---------- */
+    let subtitle = format!("{} · {}", account_label.to_uppercase(), timespan_label);
+    let figure = pdf::amount_eur(saldo);
+
+    let (mut report, mut sheet) = Report::new("Transactions export", lang)?;
+    pdf::draw_header(
+        &report,
+        &mut sheet,
+        &Header {
+            title: lang.title_transactions(),
+            subtitle: &subtitle,
+            figure_label: lang.net_amount(),
+            figure: &figure,
+            note: "",
+        },
     );
 
-    // income
-    {
-        let label = "Total income";
-        let value = format!("{} €", format_amount_eu(sum_income));
-        draw_text(
-            &layer_ref,
-            &font_bold,
-            label,
-            m_l.0 + pad,
-            y,
-            fs_head,
-            black(),
-        );
-        let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
-        draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, income());
-        y -= row_h;
-    }
-    // expenses
-    {
-        let label = "Total expenses";
-        let value = format!("{} €", format_amount_eu(sum_expense));
-        draw_text(
-            &layer_ref,
-            &font_bold,
-            label,
-            m_l.0 + pad,
-            y,
-            fs_head,
-            black(),
-        );
-        let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
-        draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, expense());
-        y -= row_h;
-    }
-    // saldo
-    {
-        let label = "Saldo";
-        let value = format!("{} €", format_amount_eu(saldo));
-        draw_text(
-            &layer_ref,
-            &font_bold,
-            label,
-            m_l.0 + pad,
-            y,
-            fs_head,
-            black(),
-        );
-        let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
-        let s_col = if saldo < 0.0 { expense() } else { income() };
-        draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, s_col);
-    }
-
-    // save
-    let file = File::create(&path).map_err(|e| e.to_string())?;
-    doc.save(&mut BufWriter::new(file))
-        .map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
-}
-
-/* ======================================================================
-Helpers (colors, drawing, layout, formatting, clipping, alignment)
-====================================================================== */
-
-fn black() -> Color {
-    Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None))
-}
-fn grid() -> Color {
-    Color::Rgb(Rgb::new(0.84, 0.85, 0.86, None))
-} // #D6D6DB
-fn header_bg() -> Color {
-    Color::Rgb(Rgb::new(0.95, 0.96, 0.98, None))
-}
-fn row_alt() -> Color {
-    Color::Rgb(Rgb::new(0.985, 0.985, 0.985, None))
-}
-fn income() -> Color {
-    Color::Rgb(Rgb::new(0.09, 0.64, 0.29, None))
-} // green-600
-fn expense() -> Color {
-    Color::Rgb(Rgb::new(0.86, 0.15, 0.15, None))
-} // red-600
-fn total_bg() -> Color {
-    Color::Rgb(Rgb::new(0.94, 0.97, 0.94, None))
-} // greenish tint
-
-fn draw_rect(
-    layer: &PdfLayerReference,
-    x: f64,
-    y_top: f64,
-    w: f64,
-    h: f64,
-    fill: Option<Color>,
-    stroke: Option<(Color, f64)>,
-) {
-    let pts = vec![
-        (Point::new(Mm(x), Mm(y_top)), false),
-        (Point::new(Mm(x + w), Mm(y_top)), false),
-        (Point::new(Mm(x + w), Mm(y_top - h)), false),
-        (Point::new(Mm(x), Mm(y_top - h)), false),
-    ];
-    let shape = Line {
-        points: pts,
-        is_closed: true,
-        has_fill: fill.is_some(),
-        has_stroke: stroke.is_some(),
-        is_clipping_path: false,
-    };
-    if let Some(c) = fill {
-        layer.set_fill_color(c);
-    }
-    if let Some((c, th)) = stroke {
-        layer.set_outline_color(c);
-        layer.set_outline_thickness(th);
-    }
-    layer.add_shape(shape);
-}
-
-fn draw_text(
-    layer: &PdfLayerReference,
-    font: &IndirectFontRef,
-    s: &str,
-    x: f64,
-    y_top: f64,
-    fs: f64,
-    color: Color,
-) {
-    layer.set_fill_color(color);
-    // baseline tweak so text looks centered in the row height we use
-    layer.use_text(s, fs, Mm(x), Mm(y_top - 4.0), font);
-}
-
-fn draw_table_header(
-    layer: &PdfLayerReference,
-    font_bold: &IndirectFontRef,
-    x0: f64,
-    y_top: f64,
-    content_w: f64,
-    header_h: f64,
-    cols: &[String],
-    col_w_mm: &[f64],
-    fs_head: f64,
-    pad: f64,
-) {
-    draw_rect(
-        layer,
-        x0,
-        y_top,
-        content_w,
-        header_h,
-        Some(header_bg()),
-        Some((grid(), 0.3)),
+    // Only spend is broken down by category; income would drown the shares.
+    // Transfers and opening balances are not spending, exactly as the Stats
+    // page treats them.
+    let stats = pdf::stats_from(
+        &items,
+        lang,
+        |it| it.category.clone(),
+        |it| {
+            let lower = it
+                .category
+                .as_deref()
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default();
+            let skip = it.transfer_id.is_some() || lower == "transfer" || lower == "init";
+            if !skip && it.amount < 0.0 {
+                it.amount
+            } else {
+                0.0
+            }
+        },
     );
-    draw_rect(layer, x0, y_top, 0.1, header_h, None, Some((grid(), 0.3)));
-    draw_rect(
-        layer,
-        x0 + content_w,
-        y_top,
-        0.1,
-        header_h,
-        None,
-        Some((grid(), 0.3)),
-    );
+    pdf::draw_sidebar(&report, &sheet.layer, sheet.y + 4.0, &stats);
 
-    let mut x = x0;
-    for (i, w) in col_w_mm.iter().enumerate() {
-        if i > 0 {
-            draw_rect(layer, x, y_top, 0.1, header_h, None, Some((grid(), 0.3)));
+    let cols_sel: Vec<String> = columns.unwrap_or_else(|| {
+        vec![
+            "date".into(),
+            "account".into(),
+            "category".into(),
+            "description".into(),
+            "amount".into(),
+        ]
+    });
+    let table_cols = report_columns(&cols_sel, lang);
+    pdf::draw_table_head(&report, &mut sheet, &table_cols);
+
+    let floor = pdf::MARGIN_BOT + 20.0;
+    for it in &items {
+        if sheet.y < floor {
+            report.new_page(&mut sheet);
+            pdf::draw_table_head(&report, &mut sheet, &table_cols);
         }
-        let label = match cols[i].as_str() {
-            "date" => "Date",
-            "account" => "Account",
-            "category" => "Category",
-            "description" => "Notes",
-            "amount" => "Value",
-            other => other,
+        let desc = it.description.clone().unwrap_or_default();
+        let cells: Vec<Cell> = table_cols
+            .iter()
+            .map(|c: &Col| match c.key.as_str() {
+                "date" => Cell::Plain(pdf::iso_to_de(&it.date)),
+                "account" => Cell::Plain(it.account_name.clone()),
+                "category" => Cell::Pair(it.category.clone().unwrap_or_default(), String::new()),
+                "description" => Cell::Pair(desc.clone(), String::new()),
+                "category_note" => {
+                    Cell::Pair(it.category.clone().unwrap_or_default(), desc.clone())
+                }
+                // Signs are mixed here, so the value carries a restrained tint.
+                "amount" => Cell::Amount(it.amount, true),
+                _ => Cell::Plain(String::new()),
+            })
+            .collect();
+        pdf::draw_row(&report, &mut sheet, &table_cols, &cells);
+    }
+
+    if items.is_empty() {
+        pdf::text(
+            &sheet.layer,
+            &report.font,
+            lang.no_items(),
+            pdf::MARGIN_X,
+            sheet.y,
+            pdf::FS_ROW,
+            pdf::ink_3(),
+            0.0,
+        );
+        sheet.y -= pdf::ROW_H;
+    }
+
+    if sheet.y < pdf::MARGIN_BOT + 30.0 {
+        report.new_page(&mut sheet);
+    }
+    pdf::draw_total(
+        &report,
+        &mut sheet,
+        &lang.total_items(items.len()),
+        &pdf::amount_eur(saldo),
+    );
+
+    // Income / expenses / saldo, as three quiet lines under the total.
+    let right = pdf::MARGIN_X + pdf::TABLE_W;
+    for (label, value, tint) in [
+        (lang.income(), sum_income, true),
+        (lang.expenses(), sum_expense, true),
+        (lang.saldo(), saldo, false),
+    ] {
+        pdf::text(
+            &sheet.layer,
+            &report.font,
+            label,
+            pdf::MARGIN_X,
+            sheet.y,
+            pdf::FS_LABEL,
+            pdf::ink_3(),
+            pdf::TRACK_LABEL,
+        );
+        let color = if !tint {
+            pdf::ink()
+        } else if value < 0.0 {
+            pdf::neg()
+        } else {
+            pdf::pos()
         };
-        // To guarantee "inside cell", header labels are left-aligned too
-        draw_text(layer, font_bold, label, x + pad, y_top, fs_head, black());
-        x += *w;
-    }
-    draw_rect(layer, x0, y_top, content_w, 0.1, None, Some((grid(), 0.3)));
-}
-
-// "YYYY-MM-DD" -> "DD.MM.YYYY"
-fn iso_to_de(iso: &str) -> String {
-    if iso.len() >= 10 {
-        let y = &iso[0..4];
-        let m = &iso[5..7];
-        let d = &iso[8..10];
-        format!("{}.{}.{}", d, m, y)
-    } else {
-        iso.to_string()
-    }
-}
-
-// 1.234,56 with sign (no currency symbol)
-fn format_amount_eu(v: f64) -> String {
-    let sign = if v < 0.0 { "-" } else { "" };
-    let n = (v.abs() * 100.0).round() / 100.0;
-    let s = format!("{:.2}", n);
-    let parts = s.split('.').collect::<Vec<_>>();
-    let mut int = parts[0].to_string();
-    let frac = parts.get(1).copied().unwrap_or("00");
-    let mut out = String::new();
-    while int.len() > 3 {
-        let rest = int.split_off(int.len() - 3);
-        out = format!(".{}{}", rest, out);
-    }
-    out = format!("{}{}", int, out);
-    format!("{}{},{}", sign, out, frac)
-}
-
-/* ---- conservative clipping & right-edge placement for summary ---- */
-
-// VERY conservative char-based clip so content never spills out of a column.
-// Uses a "worst case" per-char width to decide how many characters can fit.
-fn clip_by_max_chars(s: &str, col_mm: f64, fs_pt: f64, padding_mm: f64) -> String {
-    // worst-case per-char width (mm) at 9.7 pt, scaled with font size
-    let worst_per_char = 0.90 * (fs_pt / 9.7);
-    let avail = (col_mm - 2.0 * padding_mm).max(3.0);
-    let max_chars = (avail / worst_per_char).floor() as usize;
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let mut out = String::new();
-    let mut count = 0usize;
-    for ch in s.chars() {
-        if count + 1 >= max_chars {
-            break;
-        }
-        out.push(ch);
-        count += 1;
-    }
-    out.push('…');
-    out
-}
-
-// Cheap right-align helper for summary values (page-wide line).
-// Compute start-X so text ends at the cell's right padding,
-// using a conservative worst-case per-char width based on font size.
-// This guarantees the value stays inside the colored summary box.
-fn text_right_x(
-    col_left_mm: f64,
-    col_w_mm: f64,
-    _font: &IndirectFontRef, // kept for API compatibility
-    s: &str,
-    fs_pt: f64,
-    padding_mm: f64,
-) -> f64 {
-    // worst-case char width at 9.7pt, scaled by fs
-    // (intentionally large so we never overflow to the right)
-    let per_char_mm = 0.90 * (fs_pt / 4.5);
-    let mut w = (s.chars().count() as f64) * per_char_mm;
-
-    // never assume wider than the available inner width
-    let max_inner = (col_w_mm - 2.0 * padding_mm).max(0.0);
-    if w > max_inner {
-        w = max_inner;
+        pdf::text_right(
+            &sheet.layer,
+            &report.font,
+            &pdf::amount(value),
+            right,
+            sheet.y,
+            pdf::FS_ROW,
+            color,
+            0.0,
+        );
+        sheet.y -= 5.4;
     }
 
-    let tx = col_left_mm + col_w_mm - padding_mm - w;
-    // and never go left of the left padding
-    tx.max(col_left_mm + padding_mm)
-}
-
-// --- width estimator tuned for amounts (digits, separators, minus, €) ---
-// We can't read real glyph metrics from printpdf, so we approximate the width
-// in millimeters based on the font size and character class.
-fn est_char_mm(ch: char, fs_pt: f64) -> f64 {
-    // base mm per "average digit" at fs=9.7 pt (empirically tuned)
-    let base = 0.46 * (fs_pt / 9.7);
-    match ch {
-        // narrower digits
-        '1' => base * 0.78,
-        // decimal/grouping separators and space
-        '.' | ',' => base * 0.62,
-        ' ' => base * 0.55,
-        // minus sign
-        '-' => base * 0.70,
-        // euro tends to be a bit wider
-        '€' => base * 1.18,
-        // typical wide letters fall back here; we mostly print numbers anyway
-        _ => base * 1.00,
-    }
-}
-
-// Approximate text width in mm for a given string at font size fs_pt
-// Signature kept the same to avoid changing the call sites; `font` is unused.
-fn text_width_mm(_font: &IndirectFontRef, s: &str, fs_pt: f64) -> f64 {
-    s.chars().map(|ch| est_char_mm(ch, fs_pt)).sum()
-}
-
-// Clip a string so it fits in a column using the estimator (keeps signature).
-fn clip_for_width_with_font(
-    font: &IndirectFontRef, // unused (kept for API compatibility)
-    s: &str,
-    col_mm: f64,
-    fs_pt: f64,
-    padding_mm: f64,
-) -> String {
-    let avail = (col_mm - 2.0 * padding_mm).max(3.0);
-    if text_width_mm(font, s, fs_pt) <= avail {
-        return s.to_string();
-    }
-    let ell = '…';
-    let ell_w = est_char_mm(ell, fs_pt);
-
-    let mut out = String::new();
-    let mut acc = 0.0;
-    for ch in s.chars() {
-        let w = est_char_mm(ch, fs_pt);
-        if acc + w + ell_w > avail {
-            break;
-        }
-        out.push(ch);
-        acc += w;
-    }
-    out.push(ell);
-    out
+    let generated = lang.generated(&chrono::Local::now().format("%d.%m.%Y %H:%M").to_string());
+    report.draw_footers(&generated);
+    report.save(path)
 }
 
 /// Compute the open settlement window for a person account.
@@ -1829,7 +1442,10 @@ async fn export_settlement_report_xlsx(
     filters: TxSearch,
     columns: Option<Vec<String>>,
     target_value: Option<f64>,
+    lang: Option<String>,
 ) -> Result<String, String> {
+    use crate::i18n::Lang;
+    let lang = Lang::from_code(lang.as_deref());
     use chrono::{Datelike, Local, NaiveDate};
     use rust_xlsxwriter::{Color, ExcelDateTime, Format, Workbook};
     let pool = current_pool(&state).await;
@@ -1839,11 +1455,7 @@ async fn export_settlement_report_xlsx(
         .ok_or("Filter to a person account first")?;
     let (account_label, _current_balance, they_owe, carry_at_cut, items_oldest) =
         compute_settlement_slice(&pool, acc_id).await?;
-    let direction_label = if they_owe {
-        format!("{} owes you", account_label)
-    } else {
-        format!("You owe {}", account_label)
-    };
+    let direction_label = lang.direction(&account_label, they_owe);
 
     // Columns (stable order)
     let mut cols = columns.unwrap_or_else(|| {
@@ -1949,11 +1561,7 @@ for o in open.iter() {
     let adj_amount = adj; // open amount, always positive
 
     let partial_note = if is_target_partial || (adj + 1e-9) < o.original {
-        Some(format!(
-            "(partial: {} € of {} €)",
-            format_amount_eu(adj),
-            format_amount_eu(o.original)
-        ))
+        Some(lang.partial(&crate::pdf::amount(adj), &crate::pdf::amount(o.original)))
     } else {
         None
     };
@@ -2029,12 +1637,12 @@ for o in open.iter() {
     let mut current_row: u32 = 0;
 
     sheet
-        .write_string_with_format(current_row, 0, "Settlement statement", &title_fmt)
+        .write_string_with_format(current_row, 0, lang.x_settlement_report(), &title_fmt)
         .map_err(|e| e.to_string())?;
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Account", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_account(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &account_label)
@@ -2042,7 +1650,7 @@ for o in open.iter() {
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Status", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_status(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &direction_label)
@@ -2050,7 +1658,7 @@ for o in open.iter() {
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Period", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_period(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &time_span_label)
@@ -2058,7 +1666,7 @@ for o in open.iter() {
     current_row += 1;
 
     sheet
-        .write_string_with_format(current_row, 0, "Generated", &label_fmt)
+        .write_string_with_format(current_row, 0, lang.x_generated(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_string(current_row, 1, &generated_at)
@@ -2069,11 +1677,11 @@ for o in open.iter() {
     let table_start_row = current_row;
     for (i, key) in cols.iter().enumerate() {
         let label = match key.as_str() {
-            "date" => "Date",
-            "account" => "Account",
-            "category" => "Category",
-            "description" => "Notes",
-            "amount" => "Value",
+            "date" => lang.x_date(),
+            "account" => lang.x_account(),
+            "category" => lang.x_category(),
+            "description" => lang.x_notes(),
+            "amount" => lang.x_value(),
             _ => key,
         };
         sheet
@@ -2093,11 +1701,11 @@ for o in open.iter() {
     let header_labels: Vec<&str> = cols
         .iter()
         .map(|k| match k.as_str() {
-            "date" => "Date",
-            "account" => "Account",
-            "category" => "Category",
-            "description" => "Notes",
-            "amount" => "Value",
+            "date" => lang.x_date(),
+            "account" => lang.x_account(),
+            "category" => lang.x_category(),
+            "description" => lang.x_notes(),
+            "amount" => lang.x_value(),
             _ => k,
         })
         .collect();
@@ -2181,7 +1789,7 @@ for o in open.iter() {
     let label_col: u16 = 0;
 
     sheet
-        .write_string_with_format(total_row, label_col, "Open amount", &label_fmt)
+        .write_string_with_format(total_row, label_col, lang.x_open_amount(), &label_fmt)
         .map_err(|e| e.to_string())?;
     sheet
         .write_number_with_format(
@@ -2213,10 +1821,12 @@ async fn export_settlement_report_pdf(
     filters: TxSearch,
     columns: Option<Vec<String>>,
     target_value: Option<f64>,
+    lang: Option<String>,
 ) -> Result<String, String> {
-    use printpdf::{BuiltinFont, IndirectFontRef, Mm, PdfDocument};
-    use std::fs::File;
-    use std::io::{BufWriter, Cursor};
+    use crate::i18n::Lang;
+    use crate::pdf::{self, Header, Report};
+
+    let lang = Lang::from_code(lang.as_deref());
     let pool = current_pool(&state).await;
 
     let acc_id = filters
@@ -2224,14 +1834,8 @@ async fn export_settlement_report_pdf(
         .ok_or("Filter to a person account first")?;
     let (account_label, _current_balance, they_owe, carry_at_cut, items_oldest) =
         compute_settlement_slice(&pool, acc_id).await?;
-    let direction_label = if they_owe {
-        format!("{} owes you", account_label)
-    } else {
-        format!("You owe {}", account_label)
-    };
 
-    // Columns
-    let cols: Vec<String> = columns.unwrap_or_else(|| {
+    let cols_sel: Vec<String> = columns.unwrap_or_else(|| {
         vec![
             "date".into(),
             "account".into(),
@@ -2241,104 +1845,94 @@ async fn export_settlement_report_pdf(
         ]
     });
 
-// Build adjusted rows (oldest-first matching; supports partials)
-use std::collections::VecDeque;
+    /* ---------- open items, oldest first (unchanged matching) ---------- */
+    use std::collections::VecDeque;
 
-struct RowRef<'a> {
-    it: &'a TransactionOut,
-    adj_amount: f64,
-    desc: String,
-}
+    struct RowRef<'a> {
+        it: &'a TransactionOut,
+        adj_amount: f64,
+        desc: String,
+    }
+    struct Open<'a> {
+        it: &'a TransactionOut,
+        remaining: f64,
+        original: f64,
+    }
 
-struct Open<'a> {
-    it: &'a TransactionOut,
-    remaining: f64, // positive outstanding
-    original: f64,  // positive original size
-}
+    let mut open: VecDeque<Open<'_>> = VecDeque::new();
+    let mut pre = carry_at_cut.max(0.0);
 
-let mut open: VecDeque<Open<'_>> = VecDeque::new();
-let mut pre = carry_at_cut.max(0.0);
-
-for it in &items_oldest {
-    if it.amount < 0.0 {
-        let mut rem = (-it.amount).max(0.0);
-        if pre > 0.0 {
-            let apply = pre.min(rem);
-            rem -= apply;
-            pre -= apply;
-        }
-        if rem > 1e-9 {
-            open.push_back(Open {
-                it,
-                remaining: rem,
-                original: (-it.amount).max(0.0),
-            });
-        }
-    } else if it.amount > 0.0 {
-        let mut payoff = it.amount;
-        while payoff > 1e-9 {
-            if let Some(front) = open.front_mut() {
-                let apply = payoff.min(front.remaining);
-                front.remaining -= apply;
-                payoff -= apply;
-                if front.remaining <= 1e-9 {
-                    open.pop_front();
+    for it in &items_oldest {
+        if it.amount < 0.0 {
+            let mut rem = (-it.amount).max(0.0);
+            if pre > 0.0 {
+                let apply = pre.min(rem);
+                rem -= apply;
+                pre -= apply;
+            }
+            if rem > 1e-9 {
+                open.push_back(Open {
+                    it,
+                    remaining: rem,
+                    original: (-it.amount).max(0.0),
+                });
+            }
+        } else if it.amount > 0.0 {
+            let mut payoff = it.amount;
+            while payoff > 1e-9 {
+                if let Some(front) = open.front_mut() {
+                    let apply = payoff.min(front.remaining);
+                    front.remaining -= apply;
+                    payoff -= apply;
+                    if front.remaining <= 1e-9 {
+                        open.pop_front();
+                    }
+                } else {
+                    pre += payoff;
+                    break;
                 }
-            } else {
-                pre += payoff;
-                break;
             }
         }
     }
-}
 
-// Produce rows (oldest → newest), appending "(partial: x € of y €)" when needed
-let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
-let mut remaining_target = target_value.unwrap_or(f64::MAX);
+    let mut rows: Vec<RowRef<'_>> = Vec::with_capacity(open.len());
+    let mut remaining_target = target_value.unwrap_or(f64::MAX);
 
-for o in open.iter() {
-    if remaining_target <= 1e-9 {
-        break; // target met
+    for o in open.iter() {
+        if remaining_target <= 1e-9 {
+            break;
+        }
+        let mut adj = o.remaining;
+        let mut is_target_partial = false;
+        if adj > remaining_target {
+            adj = remaining_target;
+            is_target_partial = true;
+        }
+        remaining_target -= adj;
+
+        let mut desc = o.it.description.as_deref().unwrap_or("").to_string();
+        if is_target_partial || (adj + 1e-9) < o.original {
+            let note = lang.partial(&pdf::amount(adj), &pdf::amount(o.original));
+            desc = if desc.is_empty() {
+                note
+            } else {
+                format!("{desc} {note}")
+            };
+        }
+        rows.push(RowRef {
+            it: o.it,
+            adj_amount: adj,
+            desc,
+        });
     }
 
-    let mut adj = o.remaining; // positive
-    let mut is_target_partial = false;
-    
-    if adj > remaining_target {
-        adj = remaining_target;
-        is_target_partial = true;
-    }
-    
-    remaining_target -= adj;
+    let total_outstanding: f64 = rows.iter().map(|r| r.adj_amount).sum();
 
-    let mut desc = o.it.description.as_deref().unwrap_or("").to_string();
-    if is_target_partial || (adj + 1e-9) < o.original {
-        let note = format!(
-            "(partial: {} € of {} €)",
-            format_amount_eu(adj),
-            format_amount_eu(o.original)
-        );
-        desc = if desc.is_empty() { note } else { format!("{desc} {note}") };
-    }
-    rows.push(RowRef {
-        it: o.it,
-        adj_amount: adj,
-        desc,
-    });
-}
-
-    // Period
-    let (period_from, period_to) = if rows.is_empty() {
-        (None, None)
-    } else {
-        (
-            Some(rows.first().unwrap().it.date.clone()),
-            Some(rows.last().unwrap().it.date.clone()),
-        )
-    };
-
-    // Output path
-    let download_dir = app.path().download_dir().map_err(|_| "No downloads directory")?;
+    /* ---------- output path (unchanged naming) ---------- */
+    let download_dir = app
+        .path()
+        .download_dir()
+        .map_err(|_| "No downloads directory")?;
     let ts = chrono::Local::now().format("%Y%m%d").to_string();
     let safe_name: String = account_label
         .chars()
@@ -2347,269 +1941,185 @@ for o in open.iter() {
     let path = std::path::PathBuf::from(download_dir)
         .join(format!("settlement_{}_{}.pdf", safe_name, ts));
 
-    // PDF canvas setup
-    let page_w = Mm(210.0);
-    let page_h = Mm(297.0);
-    let m_l = Mm(14.0);
-    let m_r = Mm(14.0);
-    let m_t = Mm(16.0);
-    let m_b = Mm(18.0);
-    let content_w = page_w.0 - m_l.0 - m_r.0;
-
-    let (doc, page_id, layer_id) =
-        PdfDocument::new("Settlement statement", page_w, page_h, "Layer 1");
-
-    // fonts
-    fn load_font(
-        doc: &printpdf::PdfDocumentReference,
-        file: &str,
-        fallback: BuiltinFont,
-    ) -> Result<IndirectFontRef, String> {
-        let path = format!("{}/assets/{}", env!("CARGO_MANIFEST_DIR"), file);
-        match std::fs::read(&path) {
-            Ok(bytes) => doc
-                .add_external_font(Cursor::new(bytes))
-                .map_err(|e| e.to_string()),
-            Err(_) => doc.add_builtin_font(fallback).map_err(|e| e.to_string()),
-        }
-    }
-    let font_normal = load_font(&doc, "DejaVuSans.ttf", BuiltinFont::Helvetica)?;
-    let font_bold = load_font(&doc, "DejaVuSans-Bold.ttf", BuiltinFont::HelveticaBold)?;
-
-    // sizes
-    let fs_title = 13.0;
-    let fs_meta = 9.5;
-    let fs_head = 10.2;
-    let fs_cell = 9.7;
-    let header_h = 9.0;
-    let row_h = 7.2;
-    let pad = 1.8;
-
-    // widths (description expands)
-    fn base_width_for(col: &str) -> f64 {
-        match col {
-            "date" => 24.0,
-            "account" => 36.0,
-            "category" => 36.0,
-            "amount" => 28.0,
-            _ => 24.0,
-        }
-    }
-    let mut sum_fixed = 0.0;
-    let mut has_desc = false;
-    for c in &cols {
-        if c == "description" {
-            has_desc = true;
-            continue;
-        }
-        sum_fixed += base_width_for(c);
-    }
-    let mut col_w_mm: Vec<f64> = Vec::with_capacity(cols.len());
-    for c in &cols {
-        if c == "description" && has_desc {
-            let w = (content_w - sum_fixed).max(24.0);
-            col_w_mm.push(w);
-        } else {
-            col_w_mm.push(base_width_for(c));
-        }
-    }
-
-    // page
-    let mut page = page_id;
-    let mut layer = layer_id;
-    let mut layer_ref = doc.get_page(page).get_layer(layer);
-    let mut y = page_h.0 - m_t.0;
-
-    // meta
-    draw_text(
-        &layer_ref,
-        &font_bold,
-        "Settlement statement (open items)",
-        m_l.0,
-        y,
-        fs_title,
-        black(),
-    );
-    y -= 4.0 + row_h;
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Account: {}", account_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
-    );
-    y -= row_h;
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Status: {}", direction_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
-    );
-    y -= row_h;
-
-    let period_label = match (&period_from, &period_to) {
-        (Some(df), Some(dt)) => format!("Period: {} – {}", iso_to_de(df), iso_to_de(dt)),
-        (Some(df), None) => format!("Period: from {}", iso_to_de(df)),
-        (None, Some(dt)) => format!("Period: until {}", iso_to_de(dt)),
-        _ => "Period: —".to_string(),
+    /* ---------- layout ---------- */
+    let period = match (rows.first(), rows.last()) {
+        (Some(f), Some(l)) => format!(
+            "{} – {}",
+            pdf::iso_to_de(&f.it.date),
+            pdf::iso_to_de(&l.it.date)
+        ),
+        _ => lang.all_time().to_string(),
     };
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &period_label,
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
+    let subtitle = format!("{} · {}", account_label.to_uppercase(), period);
+    let figure = pdf::amount_eur(total_outstanding);
+    let note = lang.direction(&account_label, they_owe);
+
+    let (mut report, mut sheet) = Report::new("Settlement statement", lang)?;
+    pdf::draw_header(
+        &report,
+        &mut sheet,
+        &Header {
+            title: lang.title_settlement(),
+            subtitle: &subtitle,
+            figure_label: lang.open_amount(),
+            figure: &figure,
+            note: &note,
+        },
     );
-    y -= row_h;
 
-    let generated_label = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
-    draw_text(
-        &layer_ref,
-        &font_normal,
-        &format!("Generated: {}", generated_label),
-        m_l.0,
-        y,
-        fs_meta,
-        black(),
+    // The sidebar is anchored beside the table on the first page only.
+    let stats = pdf::stats_from(
+        &rows,
+        lang,
+        |r| r.it.category.clone(),
+        |r| r.adj_amount,
     );
-    y -= row_h + 2.0;
+    pdf::draw_sidebar(&report, &sheet.layer, sheet.y + 4.0, &stats);
 
-    // header
-    draw_table_header(
-        &layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head, pad,
-    );
-    y -= header_h;
+    let table_cols = report_columns(&cols_sel, lang);
+    pdf::draw_table_head(&report, &mut sheet, &table_cols);
 
-    // rows
-    let mut total_outstanding: f64 = 0.0;
-
-    for (row_idx, row) in rows.iter().enumerate() {
-        if y < m_b.0 + (row_h * 3.0) {
-            let (np, nl) = doc.add_page(page_w, page_h, "Layer");
-            page = np;
-            layer = nl;
-            layer_ref = doc.get_page(page).get_layer(layer);
-            y = page_h.0 - m_t.0;
-            draw_table_header(
-                &layer_ref, &font_bold, m_l.0, y, content_w, header_h, &cols, &col_w_mm, fs_head,
-                pad,
-            );
-            y -= header_h;
+    let floor = pdf::MARGIN_BOT + 20.0;
+    for row in &rows {
+        if sheet.y < floor {
+            report.new_page(&mut sheet);
+            pdf::draw_table_head(&report, &mut sheet, &table_cols);
         }
+        let cells = settlement_cells(&table_cols, row.it, &row.desc, row.adj_amount);
+        pdf::draw_row(&report, &mut sheet, &table_cols, &cells);
+    }
 
-        if row_idx % 2 == 1 {
-            draw_rect(
-                &layer_ref,
-                m_l.0,
-                y,
-                content_w,
-                row_h,
-                Some(row_alt()),
-                None,
-            );
-        }
-
-        // column borders
-        {
-            let mut gx = m_l.0;
-            draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
-            for w in &col_w_mm {
-                gx += *w;
-                draw_rect(&layer_ref, gx, y, 0.1, row_h, None, Some((grid(), 0.18)));
-            }
-        }
-
-        // values
-        let mut x = m_l.0;
-        for (i, w) in col_w_mm.iter().enumerate() {
-            let key = cols[i].as_str();
-            if key == "amount" {
-                let s_full = format!("{} €", format_amount_eu(row.adj_amount));
-                let s = clip_by_max_chars(&s_full, *w, fs_cell, pad);
-                let color = if row.adj_amount < 0.0 {
-                    expense()
-                } else {
-                    income()
-                };
-                draw_text(&layer_ref, &font_bold, &s, x + pad, y, fs_cell, color);
-            } else {
-                let content = match key {
-                    "date" => iso_to_de(&row.it.date),
-                    "account" => row.it.account_name.clone(),
-                    "category" => row.it.category.clone().unwrap_or_default(),
-                    "description" => row.desc.clone(),
-                    other => other.to_string(),
-                };
-                let s = clip_for_width_with_font(&font_normal, &content, *w, fs_cell, pad);
-                draw_text(&layer_ref, &font_normal, &s, x + pad, y, fs_cell, black());
-            }
-            x += *w;
-        }
-
-        draw_rect(
-            &layer_ref,
-            m_l.0,
-            y,
-            content_w,
-            0.1,
-            None,
-            Some((grid(), 0.18)),
+    if rows.is_empty() {
+        pdf::text(
+            &sheet.layer,
+            &report.font,
+            lang.no_items(),
+            pdf::MARGIN_X,
+            sheet.y,
+            pdf::FS_ROW,
+            pdf::ink_3(),
+            0.0,
         );
-
-        total_outstanding += row.adj_amount;
-        y -= row_h;
+        sheet.y -= pdf::ROW_H;
     }
 
-    // --- Single TOTAL line ---
-    if y < m_b.0 + (row_h * 2.0) {
-        let (np, nl) = doc.add_page(page_w, page_h, "Layer");
-        page = np;
-        layer = nl;
-        layer_ref = doc.get_page(page).get_layer(layer);
-        y = page_h.0 - m_t.0;
+    if sheet.y < pdf::MARGIN_BOT + 16.0 {
+        report.new_page(&mut sheet);
     }
-
-    y -= 2.0;
-    draw_rect(
-        &layer_ref,
-        m_l.0,
-        y,
-        content_w,
-        row_h * 1.2,
-        Some(total_bg()),
-        Some((grid(), 0.3)),
+    pdf::draw_total(
+        &report,
+        &mut sheet,
+        &lang.total_items(rows.len()),
+        &pdf::amount_eur(total_outstanding),
     );
 
-    let label = "Open amount";
-    let value = format!("{} €", format_amount_eu(total_outstanding));
-    draw_text(
-        &layer_ref,
-        &font_bold,
-        label,
-        m_l.0 + pad,
-        y,
-        fs_head,
-        black(),
-    );
-    let rx = text_right_x(m_l.0, content_w, &font_bold, &value, fs_head, pad);
-    let col = if total_outstanding < 0.0 {
-        expense()
-    } else {
-        income()
-    };
-    draw_text(&layer_ref, &font_bold, &value, rx, y, fs_head, col);
-
-    let file = File::create(&path).map_err(|e| e.to_string())?;
-    doc.save(&mut BufWriter::new(file))
-        .map_err(|e| e.to_string())?;
+    let generated = lang.generated(&chrono::Local::now().format("%d.%m.%Y %H:%M").to_string());
+    report.draw_footers(&generated);
+    report.save(&path)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Table columns for both reports. When both category and note are selected
+/// they share one column, as in the design; otherwise each keeps its own.
+fn report_columns(sel: &[String], lang: crate::i18n::Lang) -> Vec<crate::pdf::Col> {
+    use crate::pdf::{Col, COL_DATE_W, COL_VALUE_W, TABLE_W};
+
+    let has = |k: &str| sel.iter().any(|c| c == k);
+    let (cat, desc) = (has("category"), has("description"));
+    let mut cols: Vec<Col> = Vec::new();
+    let mut fixed = 0.0;
+
+    if has("date") {
+        cols.push(Col {
+            key: "date".into(),
+            label: lang.col_date().into(),
+            w: COL_DATE_W,
+            right: false,
+        });
+        fixed += COL_DATE_W;
+    }
+    if has("account") {
+        cols.push(Col {
+            key: "account".into(),
+            label: lang.col_account().into(),
+            w: 26.0,
+            right: false,
+        });
+        fixed += 26.0;
+    }
+    if cat || desc {
+        let key = if cat && desc {
+            "category_note"
+        } else if cat {
+            "category"
+        } else {
+            "description"
+        };
+        let label = match key {
+            "category_note" => lang.col_category_note(),
+            "category" => lang.col_category(),
+            _ => lang.col_note(),
+        };
+        cols.push(Col {
+            key: key.into(),
+            label: label.into(),
+            w: 0.0, // filled below: this column takes the remaining width
+            right: false,
+        });
+    }
+    if has("amount") {
+        fixed += COL_VALUE_W;
+    }
+
+    let flex = (TABLE_W - fixed).max(20.0);
+    for c in cols.iter_mut() {
+        if c.w == 0.0 {
+            c.w = flex;
+        }
+    }
+    if has("amount") {
+        cols.push(Col {
+            key: "amount".into(),
+            label: lang.col_value().into(),
+            w: COL_VALUE_W,
+            right: true,
+        });
+    }
+
+    // With no flexible column (say date + value only) the table would stop
+    // short of TABLE_W and the value column would no longer line up with the
+    // right-aligned total below it. Hand the slack to the last column.
+    let used: f64 = cols.iter().map(|c| c.w).sum();
+    if let Some(last) = cols.last_mut() {
+        if used < TABLE_W {
+            last.w += TABLE_W - used;
+        }
+    }
+    cols
+}
+
+fn settlement_cells(
+    cols: &[crate::pdf::Col],
+    it: &TransactionOut,
+    desc: &str,
+    amount: f64,
+) -> Vec<crate::pdf::Cell> {
+    use crate::pdf::{iso_to_de, Cell};
+    cols.iter()
+        .map(|c| match c.key.as_str() {
+            "date" => Cell::Plain(iso_to_de(&it.date)),
+            "account" => Cell::Plain(it.account_name.clone()),
+            "category" => Cell::Pair(it.category.clone().unwrap_or_default(), String::new()),
+            "description" => Cell::Pair(desc.to_string(), String::new()),
+            "category_note" => Cell::Pair(
+                it.category.clone().unwrap_or_default(),
+                desc.to_string(),
+            ),
+            // Open items are all the same direction, so they stay monochrome.
+            "amount" => Cell::Amount(amount, false),
+            _ => Cell::Plain(String::new()),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -3040,6 +2550,192 @@ fn main() { run(); }
 mod tests {
     use super::*;
     use std::borrow::Cow;
+
+    /* ---------- report column selection ---------- */
+
+    fn sel(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn category_and_note_share_one_column_but_stay_separate_alone() {
+        let lang = crate::i18n::Lang::En;
+
+        let both = report_columns(&sel(&["date", "category", "description", "amount"]), lang);
+        let keys: Vec<&str> = both.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, vec!["date", "category_note", "amount"]);
+        assert_eq!(both[1].label, "CATEGORY / NOTE");
+
+        let cat_only = report_columns(&sel(&["date", "category", "amount"]), lang);
+        let keys: Vec<&str> = cat_only.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, vec!["date", "category", "amount"]);
+        assert_eq!(cat_only[1].label, "CATEGORY");
+
+        let note_only = report_columns(&sel(&["description", "amount"]), lang);
+        let keys: Vec<&str> = note_only.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, vec!["description", "amount"]);
+        assert_eq!(note_only[0].label, "NOTE");
+    }
+
+    #[test]
+    fn a_deselected_column_never_appears() {
+        let lang = crate::i18n::Lang::En;
+        let cols = report_columns(&sel(&["date", "amount"]), lang);
+        let keys: Vec<&str> = cols.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, vec!["date", "amount"]);
+        assert!(!keys.contains(&"account"));
+    }
+
+    #[test]
+    fn columns_always_fill_the_table_width_exactly() {
+        let lang = crate::i18n::Lang::En;
+        for keys in [
+            vec!["date", "account", "category", "description", "amount"],
+            vec!["date", "category", "description", "amount"],
+            vec!["date", "amount"],
+            vec!["amount"],
+            vec!["date"],
+            vec!["account", "category"],
+        ] {
+            let cols = report_columns(&sel(&keys), lang);
+            let total: f64 = cols.iter().map(|c| c.w).sum();
+            assert!(
+                (total - crate::pdf::TABLE_W).abs() < 1e-6,
+                "{keys:?} spans {total} mm, expected {}",
+                crate::pdf::TABLE_W
+            );
+            assert!(cols.iter().all(|c| c.w > 0.0), "{keys:?} has a zero-width column");
+        }
+    }
+
+    #[test]
+    fn only_the_value_column_is_right_aligned() {
+        let lang = crate::i18n::Lang::En;
+        let cols = report_columns(&sel(&["date", "account", "category", "description", "amount"]), lang);
+        for c in &cols {
+            assert_eq!(c.right, c.key == "amount", "{} alignment", c.key);
+        }
+    }
+
+    /* ---------- the transactions PDF, end to end on a real database ---------- */
+
+    fn all_rows() -> TxSearch {
+        TxSearch {
+            query: None,
+            account_id: None,
+            date_from: None,
+            date_to: None,
+            tx_type: Some("all".into()),
+            limit: None,
+            offset: None,
+            sort_by: Some("date".into()),
+            sort_dir: Some("asc".into()),
+        }
+    }
+
+    /// Parses an exported file back with a real PDF reader, so the assertions
+    /// below prove the document is well-formed rather than merely non-empty.
+    fn page_count(path: &std::path::Path) -> usize {
+        let doc = lopdf::Document::load(path).expect("exported file parses as a PDF");
+        doc.get_pages().len()
+    }
+
+    #[tokio::test]
+    async fn transactions_pdf_is_written_for_both_languages() {
+        let (pool, _path) = temp_pool().await;
+        migrate_up_to(&pool, 2).await;
+        let bank = insert_account(&pool, "Bank", "standard").await;
+        insert_tx(&pool, bank, "2026-09-01", Some("Netflix"), -12.99, Some("Abo")).await;
+        insert_tx(&pool, bank, "2026-09-02", Some("rewe"), -24.10, Some("Lebensmittel")).await;
+        insert_tx(&pool, bank, "2026-09-03", Some("Salary"), 3200.0, Some("Gehalt")).await;
+
+        for lang in [crate::i18n::Lang::En, crate::i18n::Lang::De] {
+            let out = std::env::temp_dir().join(format!("at_tx_{:?}.pdf", lang));
+            build_transactions_pdf(&pool, all_rows(), None, lang, &out)
+                .await
+                .expect("pdf built");
+            let bytes = std::fs::read(&out).expect("pdf readable");
+            assert!(bytes.starts_with(b"%PDF-"), "{lang:?} is not a PDF");
+            assert!(bytes.len() > 5000, "{lang:?} looks empty");
+            assert_eq!(page_count(&out), 1, "{lang:?} page count");
+            let _ = std::fs::remove_file(&out);
+        }
+    }
+
+    #[tokio::test]
+    async fn transactions_pdf_honours_the_column_selection_and_filters() {
+        let (pool, _path) = temp_pool().await;
+        migrate_up_to(&pool, 2).await;
+        let bank = insert_account(&pool, "Bank", "standard").await;
+        let cash = insert_account(&pool, "Cash", "standard").await;
+        insert_tx(&pool, bank, "2026-09-01", Some("a"), -10.0, Some("Food")).await;
+        insert_tx(&pool, cash, "2026-09-02", Some("b"), -20.0, Some("Food")).await;
+
+        // a narrow column set still produces a valid document
+        let out = std::env::temp_dir().join("at_tx_cols.pdf");
+        build_transactions_pdf(
+            &pool,
+            all_rows(),
+            Some(vec!["date".into(), "amount".into()]),
+            crate::i18n::Lang::En,
+            &out,
+        )
+        .await
+        .expect("pdf built");
+        assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
+
+        // and so does an account filter that matches a single row
+        let mut filtered = all_rows();
+        filtered.account_id = Some(cash);
+        build_transactions_pdf(&pool, filtered, None, crate::i18n::Lang::De, &out)
+            .await
+            .expect("pdf built");
+        assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[tokio::test]
+    async fn transactions_pdf_handles_an_empty_result() {
+        let (pool, _path) = temp_pool().await;
+        migrate_up_to(&pool, 2).await;
+        let out = std::env::temp_dir().join("at_tx_empty.pdf");
+        build_transactions_pdf(&pool, all_rows(), None, crate::i18n::Lang::En, &out)
+            .await
+            .expect("empty report still builds");
+        assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[tokio::test]
+    async fn transactions_pdf_paginates_a_long_result() {
+        let (pool, _path) = temp_pool().await;
+        migrate_up_to(&pool, 2).await;
+        let bank = insert_account(&pool, "Bank", "standard").await;
+        for i in 0..90 {
+            insert_tx(
+                &pool,
+                bank,
+                &format!("2026-09-{:02}", (i % 28) + 1),
+                Some("note"),
+                -(i as f64 + 1.0),
+                Some("Food"),
+            )
+            .await;
+        }
+        let out = std::env::temp_dir().join("at_tx_long.pdf");
+        build_transactions_pdf(&pool, all_rows(), None, crate::i18n::Lang::En, &out)
+            .await
+            .expect("pdf built");
+        assert!(page_count(&out) > 1, "90 rows should span several pages");
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn report_columns_follow_the_language() {
+        let de = report_columns(&sel(&["date", "category", "description", "amount"]), crate::i18n::Lang::De);
+        let labels: Vec<&str> = de.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["DATUM", "KATEGORIE / NOTIZ", "BETRAG"]);
+    }
 
     static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

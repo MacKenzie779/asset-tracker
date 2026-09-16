@@ -25,6 +25,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 futures-util = "0.3"
 
+[dev-dependencies]
+# Same version printpdf pulls in; used only to read exported PDFs back in tests.
+lopdf = "0.27"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 

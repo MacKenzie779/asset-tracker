@@ -171,3 +171,5 @@ Cargo.lock
 *.pdb
 
 # End of https://www.toptal.com/developers/gitignore/api/rust,react,node
+# Local demo database and its screenshots (regenerated, not tracked)
+demo/

@@ -4,10 +4,17 @@ A local-first desktop ledger for personal finances. Accounts, transactions, cate
 
 Built with Tauri 2 (Rust) and React. Ships as a Windows installer, a Flatpak and an AppImage.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ui-terminal-dark.png">
+  <img alt="The AssetTracker terminal: a quick-entry strip above the transaction blotter, with the ledger column on the right" src="docs/screenshots/ui-terminal-light.png">
+</picture>
+
+<sub>The terminal in light and dark. Every screenshot on this page uses invented data.</sub>
+
 ## Why AssetTracker
 
 - **Your data stays with you.** Everything lives in one SQLCipher-encrypted database file that you choose the location of. There is no account, no sync, no telemetry and no network access.
-- **Fast to use every day.** One terminal screen: a quick-entry strip docked above the transaction blotter, inline editing on every row, a `Ctrl+K` command palette that also parses shorthand like `out 21,50 lebensmittel`, keyboard shortcuts, and a global "mask amounts" toggle for when someone is looking over your shoulder.
+- **Fast to use every day.** One terminal screen: a quick-entry strip docked above the transaction blotter, inline editing on every row, a `Ctrl+K` command palette that also parses shorthand like `out 21,50 groceries`, keyboard shortcuts, and a global "mask amounts" toggle for when someone is looking over your shoulder.
 - **Built for shared money.** People you lend to, borrow from or pay for get their own balance: positive when they owe you, negative when you owe them. A settlement statement lists what is still open, oldest first.
 - **Real exports.** Excel and PDF exports of any filtered view, with the columns you pick, saved straight to your Downloads folder.
 
@@ -22,6 +29,22 @@ Built with Tauri 2 (Rust) and React. Ships as a Windows installer, a Flatpak and
 - Light, dark and system theme; mask-amounts toggle; lock-database action; keyboard shortcuts.
 - European conventions throughout: `dd.mm.yyyy` dates and `1.234,56 €` amounts.
 
+## Screenshots
+
+**Statistics** — net worth over twelve months, income against expenses, spending by category, the biggest expenses, and the balance with each person.
+
+![The stats page](docs/screenshots/ui-stats.png)
+
+**Command palette** (`Ctrl` `K`) — go anywhere, settle up with someone, export the current filter, or type a transaction straight in.
+
+
+**Accounts and people** — balances, transaction counts and open items, managed in the ledger column beside the blotter.
+
+![The accounts tab of the ledger column](docs/screenshots/ui-accounts.png)
+
+**Exports** — the PDF of a filtered view, in whichever language the app is set to.
+
+[![First page of the English PDF report](docs/screenshots/pdf-report-en.png)](docs/screenshots/pdf-report-en.png)
 ## Install
 
 ### Windows
@@ -48,7 +71,7 @@ Download the `.AppImage` from the [latest release](https://github.com/MacKenzie7
 
 1. Click **Create new database**, choose where the file should live and set a passphrase.
 2. Create one or more accounts, optionally with an initial balance.
-3. Commit transactions from the quick-entry strip above the blotter (or `Ctrl+K` and type `out 12,50 lebensmittel`).
+3. Commit transactions from the quick-entry strip above the blotter (or `Ctrl+K` and type `out 12,50 groceries`).
 
 The passphrase is the encryption key of the database. It is never written to disk and **cannot be recovered**. If you lose it, the data in that file is gone. Keep the passphrase somewhere safe and back up the database file itself; a backup is a copy of the single `.db` file.
 

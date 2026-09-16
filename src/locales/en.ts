@@ -351,7 +351,7 @@ export const en = {
 
   /* ---------- command palette ---------- */
   'palette.aria': 'Command palette',
-  'palette.placeholder': 'type a command, or: out 21,50 lebensmittel aldi',
+  'palette.placeholder': 'type a command, or: out 21,50 groceries aldi',
   'palette.commandAria': 'Command',
   'palette.results': 'Results',
   'palette.pickCategory': 'pick a category…',
@@ -396,7 +396,7 @@ export const en = {
   'palette.lock.kw': 'lock logout close',
   'palette.shortcuts': 'Keyboard shortcuts',
   'palette.shortcuts.kw': 'help keys',
-  'palette.noMatch': 'No command matches. Try “out 12,50 lebensmittel”.',
+  'palette.noMatch': 'No command matches. Try “out 12,50 groceries”.',
   'palette.footMove': '↑↓ MOVE',
   'palette.footComplete': '⇥ COMPLETE',
   'palette.footEdit': '⇧⏎ EDIT IN QUICK ENTRY',
